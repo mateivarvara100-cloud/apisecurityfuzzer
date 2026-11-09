@@ -1,0 +1,20 @@
+# Local lab target for apifuzz. Start:  docker compose up -d --build
+#                                   Stop:   docker compose down
+services:
+  vulnshop:
+    build:
+      context: .
+      dockerfile: lab/Dockerfile
+    image: apifuzz-vulnshop-lab:latest
+    container_name: vulnshop-lab
+    # 127.0.0.1 only: the deliberately vulnerable lab is reachable from this machine, not your network.
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true          # the app keeps everything in memory, so the filesystem can be read-only
+    cap_drop: [ALL]          # it needs no Linux capabilities
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DEMO_MODE: "1"         # the lab refuses to start without this
+      LAB_HARDENED: "${LAB_HARDENED:-0}"  # 1 = planted flaws fixed (the known-negative variant)
+    restart: unless-stopped

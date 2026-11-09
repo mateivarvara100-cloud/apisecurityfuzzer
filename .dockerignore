@@ -1,0 +1,4 @@
+# Keep the build context small and free of secrets: the lab image only needs the lab app and its spec.
+*
+!lab/app.py
+!lab/openapi.json
