@@ -30,6 +30,18 @@ class ScanContext:
         self.endpoints: list[Endpoint] = endpoints or []
         # Scratch space shared across one scan, e.g. ids a check collected once and reuses.
         self.cache: dict[str, object] = {}
+        # What each check did with each endpoint: {(check id, "GET /path"): (status, reason)}.
+        # The report turns this into a coverage table, so "not tested" never looks like "safe".
+        self.outcomes: dict[tuple[str, str], tuple[str, str]] = {}
+
+    def record(self, check_id: str, endpoint: Endpoint, status: str, reason: str = "") -> None:
+        """Note what a check did with an endpoint: TESTED, or NOT_TESTED with the reason why."""
+        self.outcomes[(check_id, f"{endpoint.method} {endpoint.path}")] = (status, reason)
+
+    def auth(self, account: str) -> dict[str, str] | None:
+        """The login header for test account "a" or "b", or None if that account has no token."""
+        token = self.settings.token_a if account == "a" else self.settings.token_b
+        return self.settings.auth_headers(token) if token else None
 
     def url(self, path: str) -> str:
         """Join the base URL and an endpoint path: ("https://x", "/orders") -> "https://x/orders"."""
@@ -37,6 +49,11 @@ class ScanContext:
 
 
 _PLACEHOLDER = re.compile(r"\{([^{}]+)\}")  # matches "{id}" and captures "id"
+
+# What a check did with an endpoint (see ScanContext.record). An endpoint a check records nothing
+# for counts as "not applicable": the check has nothing to look for there.
+TESTED = "tested"  # the check got a clear answer, finding or not
+NOT_TESTED = "not tested"  # the check applies here but could not reach a verdict; a reason is given
 
 
 def sample_value(type_label: str | None) -> str:
@@ -59,6 +76,21 @@ def fill_path(endpoint: Endpoint, values: dict[str, str] | None = None) -> str:
         return quote(str(value), safe="")  # safe="" also encodes "/", so it stays one segment
 
     return _PLACEHOLDER.sub(replace, endpoint.path)
+
+
+def sample_body(endpoint: Endpoint, text: str = "test") -> dict[str, object]:
+    """The smallest body the endpoint should accept: a harmless value for each required field.
+
+    When the spec marks no field as required, every declared field is filled in instead, so the
+    body is never empty. Text fields get `text`; other types get a neutral value of that type.
+    """
+    fields = [f for f in endpoint.request_fields if f.required] or endpoint.request_fields
+    samples: dict[str, object] = {"integer": 1, "number": 1, "boolean": False, "object": {}}
+    body: dict[str, object] = {}
+    for field in fields:
+        kind = field.type or "string"
+        body[field.name] = [] if kind.startswith("array") else samples.get(kind, text)
+    return body
 
 
 class Check:

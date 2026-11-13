@@ -7,11 +7,12 @@ only gathers settings and turns obvious mistakes into clear errors.
 
 import os  # read environment variables
 from pathlib import Path  # read the .env file
-from urllib.parse import urlsplit  # pull the host[:port] out of a base URL
+from urllib.parse import urljoin, urlsplit  # pull the host[:port] out of a base URL
 
 from pydantic import BaseModel  # a typed settings record
 
 from apifuzz.errors import ApifuzzError
+from apifuzz.http_client import DEFAULT_PORTS, Allowlist
 
 
 class ConfigError(ApifuzzError):
@@ -32,6 +33,21 @@ class Settings(BaseModel):
     user_b: str | None = None
     password_b: str | None = None
     login_path: str = "/login"  # where the session manager POSTs the credentials
+    login_format: str = "json"  # "json" or "form": how the credentials are encoded
+    login_user_field: str = "username"  # the name of the username field in the login request
+    login_password_field: str = "password"
+    # How a token is sent. Worked out from the spec's security scheme; "Authorization: Bearer <token>"
+    # when the spec doesn't say. A cookie scheme uses header "Cookie" and prefix "<name>=".
+    auth_header: str = "Authorization"
+    auth_prefix: str = "Bearer "
+    # Path patterns (shell style, e.g. "/posts/*") whose objects are shared between users on
+    # purpose. The bola check leaves them alone.
+    shared_paths: list[str] = []
+    burst: int = 15  # how many identical requests the rate-limit check sends to one endpoint
+
+    def auth_headers(self, token: str) -> dict[str, str]:
+        """The header that logs a request in with `token`, e.g. {"Authorization": "Bearer abc"}."""
+        return {self.auth_header: f"{self.auth_prefix}{token}"}
 
 
 def load_dotenv(path: str | Path = ".env") -> dict[str, str]:
@@ -77,6 +93,9 @@ def resolve_settings(
     token_a: str | None = None,
     token_b: str | None = None,
     require_docker: bool | None = None,
+    shared_paths: list[str] | None = None,
+    burst: int | None = None,
+    spec_source: str | None = None,
     env: dict[str, str] | None = None,
 ) -> Settings:
     """Combine CLI arguments, environment/.env, and the spec into one Settings object.
@@ -88,18 +107,36 @@ def resolve_settings(
         # .env provides defaults; a real environment variable of the same name overrides it.
         env = {**load_dotenv(), **os.environ}
 
-    base_url = base_url or env.get("APIFUZZ_BASE_URL") or _base_url_from_spec(spec)
+    # Extra allowlist entries come from the flag or the env.
+    entries = list(allowlist) if allowlist else _split_list(env.get("APIFUZZ_ALLOWLIST"))
+
+    base_url = base_url or env.get("APIFUZZ_BASE_URL")
+    if not base_url:
+        # Nobody named the target, so the spec's own "servers" entry is the only candidate. A spec
+        # is just a document (often downloaded), so it may not pick the target by itself.
+        base_url = _confirmed_spec_server(_base_url_from_spec(spec), spec_source, entries)
     if not base_url:
         raise ConfigError(
             "no base URL: pass --base-url, set APIFUZZ_BASE_URL, or use a spec that lists a server"
         )
     base_url = base_url.rstrip("/")  # so base_url + "/orders" doesn't double the slash
 
-    # The base URL's own host is always allowed; extra entries come from the flag or the env.
-    entries = list(allowlist) if allowlist else _split_list(env.get("APIFUZZ_ALLOWLIST"))
+    # A base URL that got this far was confirmed by the user, so its host is allowed.
     host = host_entry(base_url)
     if host not in entries:
         entries.insert(0, host)
+
+    auth_header, auth_prefix = _auth_scheme(spec, env)
+    if burst is None:
+        try:
+            burst = int(env.get("APIFUZZ_BURST") or 15)
+        except ValueError:
+            raise ConfigError(f"APIFUZZ_BURST must be a whole number, got: {env.get('APIFUZZ_BURST')!r}") from None
+    if not 2 <= burst <= 50:
+        raise ConfigError(f"the burst size must be between 2 and 50, got: {burst}")
+    login_format = (env.get("APIFUZZ_LOGIN_FORMAT") or "json").strip().lower()
+    if login_format not in ("json", "form"):
+        raise ConfigError(f"APIFUZZ_LOGIN_FORMAT must be json or form, got: {login_format!r}")
 
     return Settings(
         base_url=base_url,
@@ -111,13 +148,101 @@ def resolve_settings(
         user_b=env.get("APIFUZZ_USER_B") or None,
         password_b=env.get("APIFUZZ_PASSWORD_B") or None,
         login_path=env.get("APIFUZZ_LOGIN_PATH") or "/login",
+        login_format=login_format,
+        login_user_field=env.get("APIFUZZ_LOGIN_USER_FIELD") or "username",
+        login_password_field=env.get("APIFUZZ_LOGIN_PASSWORD_FIELD") or "password",
+        auth_header=auth_header,
+        auth_prefix=auth_prefix,
+        shared_paths=list(shared_paths) if shared_paths else _split_list(env.get("APIFUZZ_SHARED")),
+        burst=burst,
         # None means "not given on the command line": fall back to the env ("1", "true", "yes").
-        require_docker=(
-            require_docker
-            if require_docker is not None
-            else env.get("APIFUZZ_REQUIRE_DOCKER", "").strip().lower() in ("1", "true", "yes")
-        ),
+        require_docker=require_docker_setting(require_docker, env),
     )
+
+
+def require_docker_setting(flag: bool | None, env: dict[str, str] | None = None) -> bool:
+    """--require-docker if given, else APIFUZZ_REQUIRE_DOCKER ("1", "true", "yes") from the env or .env."""
+    if flag is not None:
+        return flag
+    if env is None:
+        env = {**load_dotenv(), **os.environ}
+    return env.get("APIFUZZ_REQUIRE_DOCKER", "").strip().lower() in ("1", "true", "yes")
+
+
+def _origin(url: str) -> tuple[str, str | None, int | None]:
+    # ("http", "localhost", 8000): scheme, host and port, with the default port filled in.
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return parts.scheme, parts.hostname, port or DEFAULT_PORTS.get(parts.scheme)
+
+
+def _is_http_url(text: str | None) -> bool:
+    return bool(text) and text.lower().startswith(("http://", "https://"))
+
+
+def _confirmed_spec_server(server: str | None, spec_source: str | None, entries: list[str]) -> str | None:
+    """The spec's server URL, but only if something other than the spec confirms it as the target.
+
+    It is confirmed when the spec was downloaded from that same host and port (the API is
+    describing itself), or when the user listed the host in --allow / APIFUZZ_ALLOWLIST.
+    Otherwise the scan, and the test accounts' tokens, would go wherever a document says.
+    """
+    if not server:
+        return None
+    if server.startswith("/"):  # a relative server such as "/api/v1": relative to where the spec lives
+        if not _is_http_url(spec_source):
+            raise ConfigError(
+                f"the spec's server is the relative path {server!r}, so the host is unknown: pass --base-url"
+            )
+        server = urljoin(spec_source, server)
+    host_entry(server)  # raises ConfigError unless it is an http(s) URL with a host
+    if _is_http_url(spec_source) and _origin(spec_source) == _origin(server):
+        return server
+    if Allowlist(entries).permits(server):
+        return server
+    raise ConfigError(
+        f"the spec names {server} as its server, but a spec may not choose the target on its own. "
+        f"If that is the API you mean to test, pass --base-url {server}"
+    )
+
+
+def _auth_scheme(spec: dict | None, env: dict[str, str]) -> tuple[str, str]:
+    """How to send a token: (header name, text put before the token).
+
+    APIFUZZ_AUTH_HEADER / APIFUZZ_AUTH_PREFIX win. Otherwise the spec's security scheme decides,
+    and "Authorization: Bearer <token>" is the fallback.
+    """
+    header, prefix = env.get("APIFUZZ_AUTH_HEADER"), env.get("APIFUZZ_AUTH_PREFIX")
+    if header or prefix:
+        prefix = (prefix or "").strip()
+        if prefix.isalpha():  # a word such as "Bearer" or "Token" is followed by a space
+            prefix += " "
+        return (header or "Authorization").strip(), prefix
+    return _auth_scheme_from_spec(spec) or ("Authorization", "Bearer ")
+
+
+def _auth_scheme_from_spec(spec: dict | None) -> tuple[str, str] | None:
+    if not spec:
+        return None
+    # OpenAPI 3 keeps schemes under components.securitySchemes; Swagger 2 under securityDefinitions.
+    schemes = (spec.get("components") or {}).get("securitySchemes") or spec.get("securityDefinitions") or {}
+    if not isinstance(schemes, dict) or not schemes:
+        return None
+    # Prefer the scheme the spec applies to every operation; otherwise the first one declared.
+    names = [n for req in spec.get("security") or [] if isinstance(req, dict) for n in req]
+    scheme = next((schemes[n] for n in names if n in schemes), next(iter(schemes.values())))
+    if not isinstance(scheme, dict):
+        return None
+    kind, name = scheme.get("type"), scheme.get("name")
+    if kind == "apiKey" and isinstance(name, str) and name:
+        if scheme.get("in") == "header":
+            return name, ""
+        if scheme.get("in") == "cookie":
+            return "Cookie", f"{name}="
+    return None  # bearer, OAuth2 and anything unknown: the Authorization: Bearer fallback
 
 
 def _split_list(value: str | None) -> list[str]:

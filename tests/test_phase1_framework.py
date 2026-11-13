@@ -29,20 +29,21 @@ runner = CliRunner()
 
 
 class TestSettings:
-    # A CLI value beats the environment, which beats the spec's servers entry.
+    # A CLI value beats the environment, which beats the spec's servers entry. The spec's server
+    # is used only when the user confirmed that host (here through the allowlist).
     def test_precedence_flag_then_env_then_spec(self):
         spec = {"servers": [{"url": "http://from-spec:1"}]}
         env = {"APIFUZZ_BASE_URL": "http://from-env:2"}
 
         assert resolve_settings(spec=spec, env=env, base_url="http://flag:3").base_url == "http://flag:3"
         assert resolve_settings(spec=spec, env=env).base_url == "http://from-env:2"
-        assert resolve_settings(spec=spec, env={}).base_url == "http://from-spec:1"
+        assert resolve_settings(spec=spec, env={"APIFUZZ_ALLOWLIST": "from-spec:1"}).base_url == "http://from-spec:1"
 
     # Swagger 2 specs give host + basePath + scheme instead of servers.
     def test_swagger_2_base_url(self):
         spec = {"swagger": "2.0", "host": "api.test:8080", "basePath": "/v1", "schemes": ["http"]}
 
-        assert resolve_settings(spec=spec, env={}).base_url == "http://api.test:8080/v1"
+        assert resolve_settings(spec=spec, allowlist=["api.test:8080"], env={}).base_url == "http://api.test:8080/v1"
 
     # No base URL anywhere is a clear configuration error.
     def test_missing_base_url_is_an_error(self):
@@ -313,7 +314,9 @@ class TestScanCommand:
     def test_finds_the_open_endpoint(self, sample_spec_path, local_api, monkeypatch):
         monkeypatch.delenv("APIFUZZ_BASE_URL", raising=False)
         result = runner.invoke(
-            app, ["scan", str(sample_spec_path), "--i-have-authorization", "--base-url", local_api, "--json"]
+            app,
+            ["scan", str(sample_spec_path), "--i-have-authorization", "--base-url", local_api, "--json",
+             "--only", "auth-required"],
         )
 
         assert result.exit_code == 1, result.output
@@ -360,15 +363,16 @@ class TestScanCommand:
         assert "no base URL" in result.output
         assert "Traceback" not in result.output
 
-    # A server that isn't running produces warnings, not a crash.
-    def test_unreachable_target_gives_warnings(self, sample_spec_path):
+    # A server that isn't running is an error (exit 2), not a clean report: nothing was tested.
+    def test_unreachable_target_is_an_error(self, sample_spec_path):
         result = runner.invoke(
             app,
             ["scan", str(sample_spec_path), "--i-have-authorization", "--base-url", "http://127.0.0.1:1", "--timeout", "2"],
         )
 
-        assert result.exit_code == 0, result.output
-        assert "warning:" in result.output
+        assert result.exit_code == 2, result.output
+        assert "nothing was tested" in result.output
+        assert "Traceback" not in result.output
 
     # `apifuzz checks` lists the registered checks.
     def test_checks_command(self):

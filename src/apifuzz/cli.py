@@ -13,15 +13,15 @@ from rich.text import Text  # plain text that rich will NOT try to interpret as 
 
 from apifuzz import __version__
 from apifuzz.checks import ScanContext, all_checks, select_checks
+from apifuzz.docker_verify import verify_targets
 from apifuzz.endpoint_model import HTTP_METHODS, Endpoint, build_endpoints
-from apifuzz.errors import AllowlistError, ApifuzzError, RequestError, SessionError
+from apifuzz.errors import ApifuzzError
 from apifuzz.finding import Severity
 from apifuzz.http_client import Allowlist, HttpClient
-from apifuzz.report import findings_table, to_html, to_json
+from apifuzz.report import coverage_notes, coverage_table, findings_table, to_html, to_json
 from apifuzz.scanner import run_scan
-from apifuzz.docker_verify import verify_targets
-from apifuzz.session_manager import authenticate
-from apifuzz.settings import host_entry, resolve_settings
+from apifuzz.session_manager import authenticate, preflight
+from apifuzz.settings import host_entry, require_docker_setting, resolve_settings
 from apifuzz.spec_loader import load_spec
 
 # The `apifuzz` command itself. pyproject.toml points the installed command at this object.
@@ -91,11 +91,15 @@ def _filter_endpoints(
     ]
 
 
-def _load_or_exit(spec: str) -> dict:
+def _load_or_exit(spec: str, *, follow_redirects: bool = True) -> dict:
     try:
-        return load_spec(spec)
+        return load_spec(spec, follow_redirects=follow_redirects)
     except ApifuzzError as exc:
         _fail(exc)
+
+
+def _warn(message: str) -> None:
+    _err.print(message, style="yellow", markup=False, highlight=False)
 
 
 def _fail(exc: Exception) -> NoReturn:
@@ -138,7 +142,7 @@ def endpoints(
             help="Confirm you are allowed to test the target. Not needed to list endpoints; "
             "scanning commands will require it.",
         ),
-    ] = False,  # accepted but unused until the scanning commands exist (Phase 1)
+    ] = False,  # accepted so the same flags work for `endpoints` and `scan`; listing sends nothing
 ) -> None:
     """List every endpoint found in a spec. Sends no requests to the API itself."""
     wanted_methods = _check_methods(methods)  # fail fast on a typo, before reading the spec
@@ -247,11 +251,36 @@ def scan(
             "Default: APIFUZZ_REQUIRE_DOCKER, else off.",
         ),
     ] = None,
+    shared: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--shared",
+            help="Path pattern whose objects are shared between users on purpose, e.g. '/posts/*'. "
+            "The bola check skips it. Repeatable. Default: APIFUZZ_SHARED.",
+        ),
+    ] = None,
+    burst: Annotated[
+        int | None,
+        typer.Option(
+            "--burst", min=2, max=50,
+            help="Requests the rate-limit check sends to one endpoint. Default: APIFUZZ_BURST, else 15.",
+        ),
+    ] = None,
     timeout: Annotated[float, typer.Option("--timeout", min=0.1, help="Seconds to wait for each response.")] = 10.0,
+    max_requests: Annotated[
+        int, typer.Option("--max-requests", min=1, help="Stop the scan after sending this many requests.")
+    ] = 1000,
+    delay: Annotated[
+        float, typer.Option("--delay", min=0.0, help="Seconds to wait between requests, to go easy on the target.")
+    ] = 0.0,
     fail_on: Annotated[
         FailOn, typer.Option("--fail-on", help="Exit with code 1 if any finding is at least this severe.")
     ] = FailOn.high,
     as_json: Annotated[bool, typer.Option("--json", help="Print the results as JSON (secrets redacted).")] = False,
+    json_path: Annotated[
+        Path | None,
+        typer.Option("--json-out", help="Also write the JSON report to this file.", dir_okay=False),
+    ] = None,
     html_path: Annotated[
         Path | None, typer.Option("--html", help="Also write a standalone HTML report to this file.", dir_okay=False)
     ] = None,
@@ -259,7 +288,8 @@ def scan(
         bool,
         typer.Option(
             "--redact/--no-redact",
-            help="Hide Authorization, cookie and API-key values in JSON/HTML reports. On by default.",
+            help="Make JSON/HTML reports safe to share: hide tokens and cookies, mask personal "
+            "fields in bodies, and shorten bodies. On by default.",
         ),
     ] = True,
 ) -> None:
@@ -285,9 +315,21 @@ def scan(
     except KeyError as exc:
         raise typer.BadParameter(str(exc.args[0]), param_hint="--only/--skip") from exc
 
-    document = _load_or_exit(spec)
+    docker_only = require_docker_setting(require_docker)
+    spec_is_url = spec.lower().startswith(("http://", "https://"))
+    if docker_only and spec_is_url:
+        # Downloading the spec is a request too. In Docker-only mode it must also go to a verified
+        # container, and may not be redirected somewhere else.
+        try:
+            verify_targets(spec, [])
+        except ApifuzzError as exc:
+            _fail(exc)
+    document = _load_or_exit(spec, follow_redirects=not docker_only)
     try:
-        settings = resolve_settings(spec=document, base_url=base_url, allowlist=allow, require_docker=require_docker)
+        settings = resolve_settings(
+            spec=document, base_url=base_url, allowlist=allow, require_docker=docker_only,
+            shared_paths=shared, burst=burst, spec_source=spec,
+        )
         if settings.require_docker:
             # Confirm the base URL and every extra entry belong to running containers, then allow
             # ONLY those exact host:port pairs (a bare "localhost" would allow every local port).
@@ -307,14 +349,17 @@ def scan(
 
     targets = _filter_endpoints(build_endpoints(document), wanted_methods, path_pattern, tags, auth)
     try:
-        with HttpClient(allowlist, timeout=timeout) as client:
+        with HttpClient(allowlist, timeout=timeout, max_requests=max_requests, delay=delay) as client:
             # Log in the test accounts that have a username/password but no token.
             settings = authenticate(client, settings)
+            # Make sure the tokens work and belong to two different users before relying on them.
+            # The full endpoint list is used: a filter such as --path must not hide /me from this.
+            for line in preflight(client, settings, build_endpoints(document)):
+                _warn(f"warning: {line}")
             if any(c.id == "bola" for c in chosen) and not (settings.token_a and settings.token_b):
-                _err.print(
+                _warn(
                     "note: the bola check was skipped because it needs two accounts. Set APIFUZZ_TOKEN_A "
-                    "and APIFUZZ_TOKEN_B, or APIFUZZ_USER_A/APIFUZZ_PASSWORD_A and the same for B.",
-                    style="yellow", markup=False, highlight=False,
+                    "and APIFUZZ_TOKEN_B, or APIFUZZ_USER_A/APIFUZZ_PASSWORD_A and the same for B."
                 )
             _err.print(
                 f"Scanning {len(targets)} endpoint(s) at {settings.base_url} with {len(chosen)} check(s)...",
@@ -322,24 +367,44 @@ def scan(
                 highlight=False,
             )
             result = run_scan(targets, chosen, ScanContext(client, settings))
-    except (AllowlistError, SessionError, RequestError) as exc:
-        # A refused host is a misconfiguration; a failed login means the checks can't be trusted.
+            answered = client.responses_received
+    except ApifuzzError as exc:
+        # A refused host or a hit request limit is a misconfiguration; a failed login or a dead
+        # token means the checks can't be trusted. All stop the scan.
         _fail(exc)
 
+    if result.requests_sent and not answered:
+        # Nothing answered at all, so nothing was tested. Exit 2, not 0: in CI a target that is
+        # down must not look like a target with no findings.
+        for line in result.errors[:5]:
+            _warn(f"warning: {line}")
+        _fail(ApifuzzError(f"no request to {settings.base_url} got an answer, so nothing was tested. Is the API running?"))
+
+    # The tokens are replaced wherever they turn up in a report, not only in known headers.
+    secrets = [settings.token_a, settings.token_b]
     if html_path is not None:
         title = f"apifuzz report: {document.get('info', {}).get('title', 'API')}"
         try:
-            html_path.write_text(to_html(result, title=title, redact=redact), encoding="utf-8")
+            html_path.write_text(to_html(result, title=title, redact=redact, secrets=secrets), encoding="utf-8")
         except OSError as exc:
             _fail(ApifuzzError(f"could not write the HTML report to {html_path}: {exc}"))
         _err.print(f"HTML report written to {html_path}", markup=False, highlight=False)
+    if json_path is not None:
+        try:
+            json_path.write_text(to_json(result, redact=redact, secrets=secrets), encoding="utf-8")
+        except OSError as exc:
+            _fail(ApifuzzError(f"could not write the JSON report to {json_path}: {exc}"))
+        _err.print(f"JSON report written to {json_path}", markup=False, highlight=False)
 
     if as_json:
-        typer.echo(to_json(result, redact=redact))
+        typer.echo(to_json(result, redact=redact, secrets=secrets))
     else:
         _out.print(findings_table(result))
+        _out.print(coverage_table(result))
+        for line in coverage_notes(result):
+            _warn(f"not tested: {line}")
         for line in result.errors:
-            _err.print(f"warning: {line}", style="yellow", markup=False, highlight=False)
+            _warn(f"warning: {line}")
 
     threshold = None if fail_on is FailOn.never else Severity[fail_on.value.upper()]
     if threshold is not None and any(f.severity >= threshold for f in result.findings):

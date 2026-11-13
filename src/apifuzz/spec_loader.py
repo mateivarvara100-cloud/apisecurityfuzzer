@@ -23,14 +23,18 @@ _FETCH_TIMEOUT = 15.0
 _PLACEHOLDER_URL = re.compile(r"file:///[^#\s\"']*__placeholder_url__\.yaml")
 
 
-def load_spec(source: str, *, client: httpx.Client | None = None) -> dict[str, Any]:
+def load_spec(
+    source: str, *, client: httpx.Client | None = None, follow_redirects: bool = True
+) -> dict[str, Any]:
     """Return the validated spec at `source` (a file path or http(s) URL) with internal $refs inlined.
 
     Raises SpecError with a readable message for anything wrong with the spec.
     `client` is only used for URL sources and exists so tests can inject a mock transport.
+    `follow_redirects=False` makes a redirected spec URL an error. `scan --require-docker` uses
+    it, so a spec on a verified container can't send the download to some other host.
     """
     # Step 1: get the raw text, from disk or from the network.
-    text = _read_source(source, client)
+    text = _read_source(source, client, follow_redirects)
     # Step 2: an empty file would make prance crash with a confusing internal error, so catch it here.
     if not text.strip():
         raise SpecError(f"{source}: the spec is empty")
@@ -55,10 +59,10 @@ def load_spec(source: str, *, client: httpx.Client | None = None) -> dict[str, A
     return parser.specification
 
 
-def _read_source(source: str, client: httpx.Client | None) -> str:
+def _read_source(source: str, client: httpx.Client | None, follow_redirects: bool = True) -> str:
     # Anything starting with http:// or https:// is downloaded; everything else is a file path.
     if source.lower().startswith(("http://", "https://")):
-        return _fetch(source, client)
+        return _fetch(source, client, follow_redirects)
     # "ftp://...", "file://..." etc. would otherwise be treated as an odd file name.
     # (A Windows path like C:\spec.json has no "://", so it isn't caught here.)
     if "://" in source:
@@ -78,14 +82,14 @@ def _read_source(source: str, client: httpx.Client | None) -> str:
         raise SpecError(f"{source}: could not read file: {exc}") from exc
 
 
-def _fetch(url: str, client: httpx.Client | None) -> str:
+def _fetch(url: str, client: httpx.Client | None, follow_redirects: bool = True) -> str:
     # Fetching the spec is a plain GET of a document; scan traffic goes through HttpClient instead.
     # Remember whether WE create the client: we must only close a client we created ourselves,
     # never one a test passed in.
     owns_client = client is None
-    # Following redirects is fine here because we're only downloading a document.
-    # (The scanner's HttpClient does the opposite, for safety.)
-    client = client or httpx.Client(timeout=_FETCH_TIMEOUT, follow_redirects=True)
+    # Following redirects is fine by default because we're only downloading a document.
+    # (The scanner's HttpClient never does, for safety.)
+    client = client or httpx.Client(timeout=_FETCH_TIMEOUT, follow_redirects=follow_redirects)
     try:
         response = client.get(url)
         response.raise_for_status()  # turns a 4xx/5xx answer into an HTTPStatusError exception

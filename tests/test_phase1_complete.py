@@ -1,10 +1,7 @@
 """Tests for the rest of Phase 1: the session manager, the HTML report and headline, and a
 ground-truth scan of the real VulnShop lab app (run in-process, no Docker needed)."""
 
-import importlib.util
 import json
-import threading
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
@@ -123,35 +120,7 @@ class TestReport:
 # ground truth: scan the real lab app and get exactly its planted flaws
 
 
-def _load_lab():
-    spec = importlib.util.spec_from_file_location("vulnshop_lab", ROOT / "lab" / "app.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.fixture
-def lab_api():
-    lab = _load_lab()
-    server = ThreadingHTTPServer(("127.0.0.1", 0), lab.Handler)
-    lab.Handler.log_message = lambda *a: None  # keep test output quiet
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-@pytest.fixture
-def clean_env(monkeypatch, tmp_path):
-    # Nothing from the real environment or the project's .env may leak into these scans.
-    for name in ("BASE_URL", "ALLOWLIST", "TOKEN_A", "TOKEN_B", "USER_A", "PASSWORD_A", "USER_B", "PASSWORD_B",
-                 "LOGIN_PATH", "REQUIRE_DOCKER"):
-        monkeypatch.delenv(f"APIFUZZ_{name}", raising=False)
-    monkeypatch.chdir(tmp_path)
-    return monkeypatch
+# The lab_api and clean_env fixtures live in conftest.py.
 
 
 class TestLabGroundTruth:
@@ -160,7 +129,7 @@ class TestLabGroundTruth:
             app, ["scan", str(ROOT / "lab" / "openapi.json"), "--i-have-authorization", "--base-url", base, "--json", *extra]
         )
 
-    # Logging in with the lab accounts, the scan finds exactly the two planted flaws, and not /me.
+    # Logging in with the lab accounts, the scan finds exactly the planted flaws, and not /me.
     def test_finds_exactly_the_planted_flaws(self, lab_api, clean_env, tmp_path):
         for k, v in {"USER_A": "alice", "PASSWORD_A": "alice", "USER_B": "bob", "PASSWORD_B": "bob"}.items():
             clean_env.setenv(f"APIFUZZ_{k}", v)
@@ -171,8 +140,19 @@ class TestLabGroundTruth:
         assert result.exit_code == 1, result.output
         report = json.loads(result.stdout)
         found = {(f["check"], f["endpoint"], f["severity"]) for f in report["findings"]}
-        assert found == {("bola", "GET /orders/{id}", "CRITICAL"), ("auth-required", "GET /users/{id}", "HIGH")}
-        assert {f["owasp"].split()[0] for f in report["findings"]} == {"API1:2023", "API2:2023"}
+        assert found == {
+            ("bola", "GET /orders/{id}", "CRITICAL"),
+            ("auth-required", "GET /users/{id}", "HIGH"),
+            ("mass-assignment", "PATCH /users/{id}", "CRITICAL"),
+            ("rate-limit", "POST /login", "HIGH"),
+            ("rate-limit", "GET /search", "MEDIUM"),
+        }
+        assert {f["owasp"].split()[0] for f in report["findings"]} == {"API1:2023", "API2:2023", "API3:2023", "API4:2023"}
+        # The mass-assignment probe put Alice's role back: the scan leaves the lab as it found it.
+        (role,) = [f for f in report["findings"] if f["check"] == "mass-assignment"]
+        assert role["key"] == "role" and "put back afterwards" in role["detail"]
+        me = httpx.get(f"{lab_api}/me", headers={"Authorization": "Bearer lab-token-alice"}).json()
+        assert me["role"] == "user"
         assert report["errors"] == []
         assert "lab-token" not in result.stdout  # tokens from the login are redacted
         page = html_file.read_text(encoding="utf-8")
@@ -190,12 +170,14 @@ class TestLabGroundTruth:
         report = json.loads(result.stdout)
         assert report["findings"] == [] and report["errors"] == []
 
-    # Without accounts, bola is skipped with a note and only the auth-required plant is found.
+    # Without accounts, bola is skipped with a note; the checks that need no login still run.
     def test_without_accounts(self, lab_api, clean_env):
         result = self._scan(lab_api)
 
         report = json.loads(result.stdout)
-        assert [(f["check"], f["endpoint"]) for f in report["findings"]] == [("auth-required", "GET /users/{id}")]
+        assert [(f["check"], f["endpoint"]) for f in report["findings"]] == [
+            ("auth-required", "GET /users/{id}"), ("rate-limit", "POST /login"), ("rate-limit", "GET /search"),
+        ]
         assert "bola check was skipped" in result.stderr
 
     # Wrong credentials stop the scan with a clear message instead of a misleading clean report.

@@ -4,9 +4,10 @@ A Finding is deliberately plain data. A check creates it; the reporter displays 
 Exchange(s) that back it up, so a reader can see the exact request and response behind the claim.
 """
 
+import hashlib  # the finding's fingerprint
 from enum import IntEnum  # an ordered set of severities, so findings can be sorted worst-first
 
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, computed_field, field_serializer
 
 from apifuzz.http_client import Exchange
 
@@ -37,6 +38,16 @@ class Finding(BaseModel):
     # The request/response pairs that justify the finding. Kept so a report can show evidence and
     # a reader can reproduce it. May be empty for an INFO note that isn't about a specific request.
     evidence: list[Exchange] = []
+    # What tells this finding apart from another by the same check on the same endpoint, e.g. the
+    # field or parameter name. Empty when a check reports at most one finding per endpoint.
+    key: str = ""
+
+    # A short stable id built from the check, the endpoint and the key. It stays the same from one
+    # run to the next, so two reports can be compared and a finding can be marked as accepted.
+    @computed_field  # included in the JSON output
+    @property
+    def fingerprint(self) -> str:
+        return hashlib.sha256(f"{self.check}|{self.endpoint}|{self.key}".encode()).hexdigest()[:16]
 
     # In JSON, write the severity as "HIGH" rather than the number 3, so reports read clearly.
     @field_serializer("severity")

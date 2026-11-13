@@ -11,8 +11,9 @@ lab-down:
 demo: lab-up
 	APIFUZZ_USER_A=alice APIFUZZ_PASSWORD_A=alice APIFUZZ_USER_B=bob APIFUZZ_PASSWORD_B=bob \
 	apifuzz scan http://localhost:8000/openapi.json --i-have-authorization --require-docker \
-	  --html report.html --fail-on never
+	  --html report.html --json-out report.json --fail-on never
 	@echo "Open report.html to see the findings. Stop the lab with: make lab-down"
 
 test:
+	ruff check .
 	pytest

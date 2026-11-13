@@ -4,10 +4,25 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apifuzz"
-version = "0.1.0"
+version = "0.2.0"
 description = "OpenAPI-driven security scanner for authorized staging APIs (OWASP API Top 10)."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "mateivarvara100-cloud" }]
+keywords = ["openapi", "swagger", "security", "owasp", "api", "bola", "idor", "scanner"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "prance>=23.6",
     "openapi-spec-validator>=0.7",
@@ -17,8 +32,12 @@ dependencies = [
     "rich>=13.7",
 ]
 
+[project.urls]
+Homepage = "https://github.com/mateivarvara100-cloud/apisecurityfuzzer"
+Issues = "https://github.com/mateivarvara100-cloud/apisecurityfuzzer/issues"
+
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
 apifuzz = "apifuzz.cli:app"
@@ -29,3 +48,18 @@ packages = ["src/apifuzz"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/W: style errors, F: real mistakes (unused names, undefined names), I: import order,
+# B: likely bugs. Long lines are left to judgement (E501 off): some tables read better wide.
+select = ["E", "W", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer reads its options from function-call defaults; that is how the library is meant to be used.
+"src/apifuzz/cli.py" = ["B008"]

@@ -1,13 +1,13 @@
 """Check: does an endpoint that the spec says needs a login actually refuse anonymous callers?
 
-This is OWASP API2 (Broken Authentication) in its simplest form. It sends exactly one request
-per endpoint, with no Authorization header, and only for read-only methods (GET/HEAD), so it
-cannot change any data on the target.
+This is OWASP API2 (Broken Authentication) in its simplest form. It sends one request per
+endpoint with no credentials, plus a second one to confirm when the first succeeds, and only for
+read-only methods (GET/HEAD), so it cannot change any data on the target.
 """
 
 from collections.abc import Iterator
 
-from apifuzz.checks.base import Check, ScanContext, fill_path
+from apifuzz.checks.base import NOT_TESTED, TESTED, Check, ScanContext, fill_path
 from apifuzz.endpoint_model import Endpoint
 from apifuzz.finding import Finding, Severity
 
@@ -25,14 +25,21 @@ class AuthRequired(Check):
         if not endpoint.requires_auth or endpoint.method not in _SAFE_METHODS:
             return  # nothing to check: open by design, or not safe to probe this way
 
-        # No headers at all: in particular, no Authorization.
+        # No headers at all: in particular, no credentials.
         url = ctx.url(fill_path(endpoint))
         exchange = ctx.client.request(endpoint.method, url)
+        status = exchange.response.status_code
 
-        # Only a success counts as a finding. 401/403 is the correct answer; 404 or a 5xx means
-        # we can't tell (a missing sample object, a broken route), so we stay quiet rather than guess.
-        if not exchange.response.ok:
+        # Only a success counts as a finding. 401/403 is the correct answer. Anything else (a 404
+        # for a missing sample object, a 5xx from a broken route) means we can't tell, so we stay
+        # quiet rather than guess, and the report says the endpoint was not tested.
+        if status in (401, 403):
+            ctx.record(self.id, endpoint, TESTED)
             return
+        if not exchange.response.ok:
+            ctx.record(self.id, endpoint, NOT_TESTED, f"answered HTTP {status} to the sample request, which settles nothing")
+            return
+        ctx.record(self.id, endpoint, TESTED)
         # Confirmation: the same request again. Only a reproducible result is reported.
         confirm = ctx.client.request(endpoint.method, url)
         if confirm.response.ok:
@@ -44,7 +51,7 @@ class AuthRequired(Check):
                 endpoint=f"{endpoint.method} {endpoint.path}",
                 detail=(
                     f"The spec says this endpoint requires a login, but a request with no "
-                    f"credentials got HTTP {exchange.response.status_code} (confirmed on a second request). Anyone may be "
+                    f"credentials got HTTP {status} (confirmed on a second request). Anyone may be "
                     f"able to call it."
                 ),
                 remediation=(

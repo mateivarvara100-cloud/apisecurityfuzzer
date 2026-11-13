@@ -9,17 +9,26 @@ memory, and resets when the container restarts. It refuses to start unless DEMO_
 response carries an X-VulnShop-Lab header, so it can't be mistaken for (or deployed as) a real service.
 
 Ground truth (what apifuzz should and should not report):
-  GET /orders/{id}  bola           login checked, ownership not (Alice can read Bob's order)
-  GET /users/{id}   auth-required  no login check at all
-  GET /me           nothing        correctly protected (false-positive guard)
+  GET /orders/{id}    bola           login checked, ownership not (Alice can read Bob's order)
+  GET /users/{id}     auth-required  no login check at all
+  PATCH /users/{id}   mass-assignment  saves every field in the body, including "role"
+  POST /login         rate-limit     any number of login attempts is accepted
+  GET /search         rate-limit     any number of searches is accepted
+  GET /me             nothing        correctly protected (false-positive guard)
+  GET /orders         nothing        lists only the caller's own orders
+  POST /orders        nothing        saves only the fields the spec allows (DELETE cleans up)
+  GET /products/{id}  nothing        shared on purpose: every logged-in user may read every product
+  GET /invoices/{id}  nothing        correctly protected: only the owner can read an invoice
 
-With LAB_HARDENED=1 both planted flaws are fixed, and apifuzz must report nothing at all
+With LAB_HARDENED=1 every planted flaw is fixed, and apifuzz must report nothing at all
 (the known-negative variant).
 """
 
 import json
 import os
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -43,6 +52,32 @@ ORDERS = {
     2: {"id": 2, "owner": 2, "item": "lamp", "quantity": 2},
 }
 PRODUCTS = ["book", "lamp", "mug", "pen"]
+# The catalog is the same for everyone. Reading a product is not a flaw, and bola must not say so.
+CATALOG = {i: {"id": i, "name": name, "price": 5 * i} for i, name in enumerate(PRODUCTS, start=1)}
+# Invoices are private and correctly protected, in both lab modes.
+INVOICES = {
+    1: {"id": 1, "owner": 1, "order": 1, "total": 5},
+    2: {"id": 2, "owner": 2, "order": 2, "total": 20},
+}
+
+
+# Hardened mode only: at most RATE_LIMIT requests per RATE_WINDOW seconds on a throttled route.
+RATE_LIMIT = 5
+RATE_WINDOW = 30.0
+_recent: dict[str, list[float]] = {}  # route -> times of the latest requests
+_recent_lock = threading.Lock()
+
+
+def _throttled(route: str) -> float | None:
+    """Count a request to `route`. Returns the seconds to wait if it is over the limit, else None."""
+    now = time.monotonic()
+    with _recent_lock:
+        times = [t for t in _recent.get(route, []) if now - t < RATE_WINDOW]
+        if len(times) >= RATE_LIMIT:
+            _recent[route] = times
+            return RATE_WINDOW - (now - times[0])
+        _recent[route] = [*times, now]
+    return None
 
 
 def _public(user: dict) -> dict:
@@ -51,18 +86,38 @@ def _public(user: dict) -> dict:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "VulnShopLab/1"
+    # HTTP/1.1 keeps a connection open between requests, so a scan doesn't reconnect every time.
+    # (Every response sets Content-Length, which keep-alive needs.)
+    protocol_version = "HTTP/1.1"
 
     # --- helpers -------------------------------------------------------------------------
 
-    def _send(self, status: int, payload: object) -> None:
+    def handle_one_request(self) -> None:
+        self._consumed = False  # has this request's body been read yet? (see _send)
+        super().handle_one_request()
+
+    def _send(self, status: int, payload: object, headers: dict[str, str] | None = None) -> None:
+        if not self._consumed:
+            self._body()  # read any unread request body, or it would be parsed as the next request
         body = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("X-VulnShop-Lab", "deliberately-vulnerable; local testing only")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+    def _too_many(self, route: str) -> bool:
+        # PLANTED (rate-limit): the lab never limits how often a route is called. Only the
+        # hardened lab counts requests and answers 429 once a route is over its limit.
+        wait = _throttled(route) if hardened() else None
+        if wait is None:
+            return False
+        self._send(429, {"error": "too many requests"}, {"Retry-After": str(max(1, round(wait)))})
+        return True
 
     def _caller(self) -> int | None:
         # "Authorization: Bearer <token>" -> user id, or None.
@@ -71,8 +126,12 @@ class Handler(BaseHTTPRequestHandler):
         return TOKENS.get(token.strip()) if scheme.lower() == "bearer" else None
 
     def _body(self) -> dict:
+        self._consumed = True
         length = int(self.headers.get("Content-Length") or 0)
-        if not length or length > 64 * 1024:
+        if length > 64 * 1024:
+            self.close_connection = True  # the oversized body is left unread, so drop the connection
+            return {}
+        if not length:
             return {}
         try:
             data = json.loads(self.rfile.read(length))
@@ -103,6 +162,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"error": "login required"})
             return self._send(200, _public(USERS[uid]))
 
+        if path == "/orders":
+            uid = self._caller()
+            if uid is None:
+                return self._send(401, {"error": "login required"})
+            return self._send(200, [o for o in ORDERS.values() if o["owner"] == uid])  # your own only
+
+        if path == "/products" or path.startswith("/products/"):
+            if self._caller() is None:
+                return self._send(401, {"error": "login required"})
+            if path == "/products":
+                return self._send(200, list(CATALOG.values()))
+            pid = self._id_after("/products/", path)
+            if pid in CATALOG:
+                return self._send(200, CATALOG[pid])
+            return self._send(404, {"error": "no such product"})
+
+        if path.startswith("/invoices/"):
+            uid = self._caller()
+            if uid is None:
+                return self._send(401, {"error": "login required"})
+            invoice = INVOICES.get(self._id_after("/invoices/", path))
+            if invoice is None or invoice["owner"] != uid:
+                return self._send(404, {"error": "no such invoice"})  # not yours = not found
+            return self._send(200, invoice)
+
         if path.startswith("/orders/"):
             if self._caller() is None:
                 return self._send(401, {"error": "login required"})
@@ -129,6 +213,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "no such user"})
 
         if path == "/search":
+            if self._too_many("/search"):
+                return None
             q = (parse_qs(url.query).get("q") or [""])[0].lower()
             return self._send(200, [p for p in PRODUCTS if q in p])
 
@@ -140,6 +226,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
 
         if path == "/login":
+            if self._too_many("/login"):
+                return None
             data = self._body()
             for uid, user in USERS.items():
                 if user["name"].lower() == str(data.get("username", "")).lower() and user["password"] == data.get("password"):
@@ -163,6 +251,19 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send(404, {"error": "not found"})
 
+    def do_DELETE(self) -> None:  # noqa: N802
+        path = urlsplit(self.path).path
+        if path.startswith("/orders/"):
+            uid = self._caller()
+            if uid is None:
+                return self._send(401, {"error": "login required"})
+            oid = self._id_after("/orders/", path)
+            if oid not in ORDERS or ORDERS[oid]["owner"] != uid:
+                return self._send(404, {"error": "no such order"})  # only your own orders
+            del ORDERS[oid]
+            return self._send(200, {"deleted": oid})
+        return self._send(404, {"error": "not found"})
+
     def do_PATCH(self) -> None:  # noqa: N802
         path = urlsplit(self.path).path
         if path.startswith("/users/"):
@@ -175,9 +276,14 @@ class Handler(BaseHTTPRequestHandler):
             if target != uid:
                 return self._send(403, {"error": "not your account"})
             data = self._body()
-            for field in ("name", "email"):  # only the fields the spec allows
-                if isinstance(data.get(field), str):
-                    USERS[target][field] = data[field]
+            if hardened():
+                for field in ("name", "email"):  # fixed: only the fields the spec allows
+                    if isinstance(data.get(field), str):
+                        USERS[target][field] = data[field]
+            else:
+                # PLANTED (mass-assignment): the whole body is copied onto the user record, so a
+                # caller can set fields the spec never offered, such as "role".
+                USERS[target].update({k: v for k, v in data.items() if k != "id"})
             return self._send(200, _public(USERS[target]))
         return self._send(404, {"error": "not found"})
 

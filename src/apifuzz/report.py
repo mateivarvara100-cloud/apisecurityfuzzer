@@ -1,11 +1,15 @@
 """Turn a ScanResult into something to show or save, with secrets removed.
 
-The HTTP client records requests exactly as sent, tokens included. Every output path goes through
-`redacted()` first (unless the user explicitly passes --no-redact), so a report can be shared
-without leaking the test accounts' credentials.
+The HTTP client records requests exactly as sent, tokens included, and a finding's evidence can
+hold another user's data (that is what a BOLA finding is). Every output path goes through
+`redacted()` first (unless the user explicitly passes --no-redact), so a report can be shared:
+credentials are replaced, personal fields in bodies are masked, and bodies are cut to an excerpt.
 """
 
 import html  # escape text before putting it in the HTML report
+import json  # read a body to mask its sensitive fields
+import re  # find e-mail addresses in body text
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 from rich.table import Table
@@ -18,6 +22,14 @@ from apifuzz.scanner import ScanResult
 # Header names (lower case) whose values are replaced. Covers both directions of a session.
 _SECRET_HEADERS = {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"}
 REDACTED = "[redacted]"
+# A JSON field whose name contains one of these has its value replaced in a redacted report.
+_SENSITIVE_KEY_PARTS = (
+    "password", "passwd", "secret", "token", "apikey", "api_key", "authorization",
+    "email", "phone", "ssn", "iban", "card",
+)
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_BODY_EXCERPT = 600  # characters of a body kept in a redacted report: enough to see its shape
+_MIN_SECRET = 6  # shorter "secrets" are not searched for: replacing "1" or "bob" everywhere garbles the report
 
 # Colour for each severity in the table.
 _STYLE = {
@@ -29,21 +41,67 @@ _STYLE = {
 }
 
 
-def redacted(result: ScanResult) -> ScanResult:
-    """A deep copy of `result` with secret header values replaced by "[redacted]"."""
+def _mask(value: object) -> object:
+    # Walk a parsed JSON value and replace the value of every sensitive-looking key.
+    if isinstance(value, dict):
+        return {
+            k: REDACTED if any(part in k.lower() for part in _SENSITIVE_KEY_PARTS) else _mask(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask(item) for item in value]
+    return value
+
+
+def _scrub(text: str, secrets: list[str]) -> str:
+    for secret in secrets:
+        text = text.replace(secret, REDACTED)
+    return text
+
+
+def _clean_body(body: str | None, secrets: list[str]) -> str | None:
+    """A body made safe to share: sensitive fields and e-mail addresses masked, then cut short."""
+    if not body:
+        return body
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        text = body  # not JSON (or cut off mid-way): fall back to the text rules below
+    else:
+        text = json.dumps(_mask(parsed)) if isinstance(parsed, (dict, list)) else body
+    text = _EMAIL.sub(REDACTED, _scrub(text, secrets))
+    if len(text) > _BODY_EXCERPT:
+        text = text[:_BODY_EXCERPT] + " ... [shortened]"
+    return text
+
+
+def redacted(result: ScanResult, secrets: Iterable[str | None] = ()) -> ScanResult:
+    """A deep copy of `result` that is safe to share.
+
+    Secret header values become "[redacted]". The values in `secrets` (the test accounts' tokens)
+    are replaced wherever they appear: any header, URL, body or warning. Bodies also have their
+    sensitive fields masked and are shortened to an excerpt.
+    """
+    known = [s for s in secrets if s and len(s) >= _MIN_SECRET]
     copy = result.model_copy(deep=True)  # never modify the caller's data
+    copy.errors = [_scrub(line, known) for line in copy.errors]
     for finding in copy.findings:
         for exchange in finding.evidence:
+            exchange.request.url = _scrub(exchange.request.url, known)
+            exchange.request.body = _clean_body(exchange.request.body, known)
+            exchange.response.body = _clean_body(exchange.response.body, known) or ""
             for headers in (exchange.request.headers, exchange.response.headers):
                 for name in headers:
                     if name.lower() in _SECRET_HEADERS:
                         headers[name] = REDACTED
+                    else:
+                        headers[name] = _scrub(headers[name], known)
     return copy
 
 
-def to_json(result: ScanResult, redact: bool = True) -> str:
+def to_json(result: ScanResult, redact: bool = True, secrets: Iterable[str | None] = ()) -> str:
     # mode="json" turns enums and other special types into plain JSON values.
-    return (redacted(result) if redact else result).model_dump_json(indent=2)
+    return (redacted(result, secrets) if redact else result).model_dump_json(indent=2)
 
 
 def headline(result: ScanResult) -> str:
@@ -75,6 +133,27 @@ def findings_table(result: ScanResult) -> Table:
     return table
 
 
+def coverage_table(result: ScanResult) -> Table:
+    """What each check actually tested. "0 findings" means little if "Tested" is 0 too."""
+    table = Table(
+        title="What was tested",
+        caption=f"{result.requests_sent} request{'' if result.requests_sent == 1 else 's'} sent to {result.target}",
+    )
+    table.add_column("Check", no_wrap=True)
+    table.add_column("Tested", justify="right")
+    table.add_column("Not tested", justify="right")
+    table.add_column("Not applicable", justify="right")
+    for c in result.coverage:
+        table.add_row(c.check, str(c.tested), Text(str(c.not_tested), style="yellow" if c.not_tested else ""),
+                      str(c.not_applicable))
+    return table
+
+
+def coverage_notes(result: ScanResult) -> list[str]:
+    """One line per endpoint a check applies to but could not judge: "bola: GET /x: reason"."""
+    return [f"{c.check}: {note}" for c in result.coverage for note in c.notes]
+
+
 # ---------------------------------------------------------------------------------------------
 # HTML: one self-contained file (inline CSS, no scripts, no external links), safe to attach.
 
@@ -102,6 +181,9 @@ code, pre { font: 13px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace; 
 pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px;
   overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 6px 0 12px; }
 ul { padding-left: 20px; }
+table { border-collapse: collapse; margin: 8px 0; }
+th, td { border: 1px solid var(--line); padding: 4px 12px; text-align: right; }
+th:first-child, td:first-child { text-align: left; }
 """
 
 
@@ -117,9 +199,11 @@ def _exchange_text(ex: Exchange) -> tuple[str, str]:
     return "\n".join(req_lines), "\n".join(res_lines)
 
 
-def to_html(result: ScanResult, title: str = "apifuzz report", redact: bool = True) -> str:
+def to_html(
+    result: ScanResult, title: str = "apifuzz report", redact: bool = True, secrets: Iterable[str | None] = ()
+) -> str:
     """A standalone HTML report: findings grouped by severity, each expandable to its evidence."""
-    shown = redacted(result) if redact else result
+    shown = redacted(result, secrets) if redact else result
     e = html.escape
     out = [
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>",
@@ -130,7 +214,11 @@ def to_html(result: ScanResult, title: str = "apifuzz report", redact: bool = Tr
         f"{e(', '.join(shown.checks_run) or 'none')}"
         f"{'' if redact else ' · <strong>secrets NOT redacted</strong>'}</p>",
         f"<p class='headline'><strong>{e(headline(shown))}</strong></p>",
+        f"<p class='muted'>Target {e(shown.target or 'unknown')} · {shown.requests_sent} requests sent · "
+        f"{shown.duration_s:g} s · apifuzz {e(shown.tool_version)}</p>",
     ]
+    if shown.incomplete:
+        out.append("<p><strong>This scan stopped early, so the results are partial.</strong> See the warnings.</p>")
     if not shown.findings:
         out.append("<p>No findings.</p>")
     for sev in sorted(Severity, reverse=True):
@@ -153,6 +241,20 @@ def to_html(result: ScanResult, title: str = "apifuzz report", redact: bool = Tr
                 out.append(f"<p class='muted'>Evidence {i}: request</p><pre>{e(req)}</pre>")
                 out.append(f"<p class='muted'>Evidence {i}: response</p><pre>{e(res)}</pre>")
             out.append("</div></details>")
+    if shown.coverage:
+        out.append(
+            "<h2>What was tested</h2><p class='muted'>No findings is only good news for endpoints "
+            "that were tested.</p><table><tr><th>Check</th><th>Tested</th><th>Not tested</th>"
+            "<th>Not applicable</th></tr>"
+            + "".join(
+                f"<tr><td>{e(c.check)}</td><td>{c.tested}</td><td>{c.not_tested}</td><td>{c.not_applicable}</td></tr>"
+                for c in shown.coverage
+            )
+            + "</table>"
+        )
+        notes = coverage_notes(shown)
+        if notes:
+            out.append("<p>Not tested:</p><ul>" + "".join(f"<li>{e(n)}</li>" for n in notes) + "</ul>")
     if shown.errors:
         out.append("<h2>Warnings</h2><ul>" + "".join(f"<li>{e(x)}</li>" for x in shown.errors) + "</ul>")
     out.append("</main></body></html>")

@@ -31,3 +31,7 @@ class RequestError(ApifuzzError):
 
 class SessionError(ApifuzzError):
     """Logging in a test account failed (bad credentials, no login endpoint, no token in the answer)."""
+
+
+class RequestLimitError(ApifuzzError):
+    """The scan reached --max-requests. It stops there instead of sending more."""

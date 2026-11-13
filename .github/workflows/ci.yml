@@ -1,0 +1,72 @@
+# Continuous integration for apifuzz itself. (Phase 3 is about other people running the scanner
+# in their CI; this is the project's own quality gate.)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: pytest
+
+  demo:
+    # Boot the real VulnShop container and scan it end to end, so the Docker path and the
+    # ground-truth demo are exercised, not just the in-process tests.
+    name: demo scan (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+      - name: Boot VulnShop and scan it
+        run: |
+          docker compose up -d --build --wait
+          apifuzz verify-docker http://localhost:8000
+          APIFUZZ_USER_A=alice APIFUZZ_PASSWORD_A=alice \
+          APIFUZZ_USER_B=bob APIFUZZ_PASSWORD_B=bob \
+          apifuzz scan http://localhost:8000/openapi.json \
+            --i-have-authorization --require-docker \
+            --json-out report.json --html report.html --fail-on never
+      - name: Check the planted BOLA was found
+        run: |
+          python - <<'PY'
+          import json, sys
+          report = json.load(open("report.json"))
+          found = {(f["check"], f["endpoint"]) for f in report["findings"]}
+          assert ("bola", "GET /orders/{id}") in found, found
+          assert ("auth-required", "GET /users/{id}") in found, found
+          print("demo scan OK:", report["requests_sent"], "requests,", len(report["findings"]), "findings")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-report
+          path: |
+            report.json
+            report.html
+      - if: always()
+        run: docker compose down

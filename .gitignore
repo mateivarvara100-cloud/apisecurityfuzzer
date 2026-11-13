@@ -27,3 +27,4 @@ out/
 .vscode/
 .idea/
 report.html
+report.json

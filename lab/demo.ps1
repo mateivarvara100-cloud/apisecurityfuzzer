@@ -8,7 +8,7 @@ if ($LASTEXITCODE -ne 0) { throw "docker compose failed; is Docker Desktop runni
 $env:APIFUZZ_USER_A = "alice"; $env:APIFUZZ_PASSWORD_A = "alice"
 $env:APIFUZZ_USER_B = "bob";   $env:APIFUZZ_PASSWORD_B = "bob"
 try {
-    apifuzz scan http://localhost:8000/openapi.json --i-have-authorization --require-docker --html report.html --fail-on never
+    apifuzz scan http://localhost:8000/openapi.json --i-have-authorization --require-docker --html report.html --json-out report.json --fail-on never
 } finally {
     Remove-Item Env:APIFUZZ_USER_A, Env:APIFUZZ_PASSWORD_A, Env:APIFUZZ_USER_B, Env:APIFUZZ_PASSWORD_B
 }

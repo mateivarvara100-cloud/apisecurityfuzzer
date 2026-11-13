@@ -13,7 +13,8 @@ from urllib.parse import urlparse  # splits a URL into scheme, host, port, path.
 import httpx  # the HTTP library that actually sends requests
 from pydantic import BaseModel  # typed record classes with free JSON output
 
-from apifuzz.errors import AllowlistError, RequestError
+from apifuzz import __version__
+from apifuzz.errors import AllowlistError, RequestError, RequestLimitError
 
 # The only schemes we allow, and the port each one uses when the URL doesn't name a port.
 DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -116,11 +117,23 @@ class HttpClient:
         timeout: float = 10.0,  # seconds before a request is abandoned
         max_body_bytes: int = 64 * 1024,  # keep at most 64 KB of each response body
         transport: httpx.BaseTransport | None = None,  # tests pass a fake network here
+        max_requests: int | None = None,  # stop the scan after this many requests (None = no cap)
+        delay: float = 0.0,  # seconds to wait between requests, to go easy on the target
     ) -> None:
         self._allowlist = allowlist
         self._max_body_bytes = max_body_bytes
+        self._max_requests = max_requests
+        self._delay = delay
+        self.requests_sent = 0  # requests that left the process (whether or not they were answered)
+        self.responses_received = 0  # requests that got an HTTP answer back
         # One reusable httpx client: it keeps connections open between requests (faster).
-        self._client = httpx.Client(timeout=timeout, follow_redirects=False, transport=transport)
+        # The User-Agent names the tool, so the target's logs show where the traffic came from.
+        self._client = httpx.Client(
+            timeout=timeout,
+            follow_redirects=False,
+            transport=transport,
+            headers={"User-Agent": f"apifuzz/{__version__}"},
+        )
 
     def request(
         self,
@@ -130,13 +143,19 @@ class HttpClient:
         headers: dict[str, str] | None = None,  # e.g. {"Authorization": "Bearer <token>"}
         params: dict[str, Any] | None = None,  # query string values, e.g. {"q": "book"}
         json: Any = None,  # a body to send as JSON
+        data: dict[str, str] | None = None,  # a body to send as form fields (some logins need this)
     ) -> Exchange:
         # httpx's `params=` REPLACES a query string already in the URL ("/search?q=a" would lose
         # q=a). Merge instead, so a URL from the spec or the user keeps its own query values.
         full_url = httpx.URL(url).copy_merge_params(params) if params else url
         # Build the request without sending it, so we can inspect the final URL first.
-        request = self._client.build_request(method, full_url, headers=headers, json=json)
+        request = self._client.build_request(method, full_url, headers=headers, json=json, data=data)
         self._allowlist.check(str(request.url))  # before anything is sent
+        if self._max_requests is not None and self.requests_sent >= self._max_requests:
+            raise RequestLimitError(f"request limit reached ({self._max_requests}); raise it with --max-requests")
+        if self._delay and self.requests_sent:
+            time.sleep(self._delay)
+        self.requests_sent += 1
 
         started = time.perf_counter()  # a high-precision clock, good for measuring durations
         try:
@@ -152,6 +171,7 @@ class HttpClient:
             # `exc or type(exc).__name__`: some httpx errors have an empty message; fall back to the class name.
             raise RequestError(f"{method.upper()} {request.url}: {exc or type(exc).__name__}") from exc
         elapsed_ms = (time.perf_counter() - started) * 1000  # seconds -> milliseconds
+        self.responses_received += 1
 
         # Package everything into plain records that a report can show later.
         return Exchange(
