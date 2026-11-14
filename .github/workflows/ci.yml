@@ -50,7 +50,7 @@ jobs:
           APIFUZZ_USER_B=bob APIFUZZ_PASSWORD_B=bob \
           apifuzz scan http://localhost:8000/openapi.json \
             --i-have-authorization --require-docker \
-            --json-out report.json --html report.html --fail-on never
+            --json-out report.json --html report.html --sarif report.sarif --fail-on never
       - name: Check the planted BOLA was found
         run: |
           python - <<'PY'
@@ -58,6 +58,8 @@ jobs:
           report = json.load(open("report.json"))
           found = {(f["check"], f["endpoint"]) for f in report["findings"]}
           assert ("bola", "GET /orders/{id}") in found, found
+          sarif = json.load(open("report.sarif"))
+          assert sarif["version"] == "2.1.0" and len(sarif["runs"][0]["results"]) == len(report["findings"])
           assert ("auth-required", "GET /users/{id}") in found, found
           assert ("injection", "GET /search") in found, found
           assert ("injection", "POST /login") in found, found
@@ -69,6 +71,7 @@ jobs:
           name: demo-report
           path: |
             report.json
+            report.sarif
             report.html
       - if: always()
         run: docker compose down

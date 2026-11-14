@@ -12,6 +12,7 @@ from rich.table import Table  # draws the endpoints table
 from rich.text import Text  # plain text that rich will NOT try to interpret as markup
 
 from apifuzz import __version__
+from apifuzz.accepted import apply_accepted, load_accepted, write_accepted
 from apifuzz.checks import ScanContext, all_checks, select_checks
 from apifuzz.docker_verify import verify_targets
 from apifuzz.endpoint_model import HTTP_METHODS, Endpoint, build_endpoints
@@ -19,6 +20,7 @@ from apifuzz.errors import ApifuzzError
 from apifuzz.finding import Severity
 from apifuzz.http_client import Allowlist, HttpClient
 from apifuzz.report import coverage_notes, coverage_table, findings_table, to_html, to_json
+from apifuzz.sarif import to_sarif
 from apifuzz.scanner import run_scan
 from apifuzz.session_manager import authenticate, preflight
 from apifuzz.settings import host_entry, require_docker_setting, resolve_settings
@@ -284,6 +286,30 @@ def scan(
     html_path: Annotated[
         Path | None, typer.Option("--html", help="Also write a standalone HTML report to this file.", dir_okay=False)
     ] = None,
+    sarif_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--sarif", dir_okay=False,
+            help="Also write a SARIF 2.1.0 report to this file, for GitHub code scanning. Findings "
+            "point at the endpoint's place in the spec.",
+        ),
+    ] = None,
+    accepted_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--accepted", dir_okay=False,
+            help="A JSON file of accepted findings (fingerprint + reason). They are still reported, "
+            "but don't count towards --fail-on.",
+        ),
+    ] = None,
+    write_accepted_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--write-accepted", dir_okay=False,
+            help="Write a starting accepted-findings file listing this scan's findings, with the "
+            "reasons left for you to fill in.",
+        ),
+    ] = None,
     redact: Annotated[
         bool,
         typer.Option(
@@ -314,6 +340,11 @@ def scan(
         chosen = select_checks(only, skip)
     except KeyError as exc:
         raise typer.BadParameter(str(exc.args[0]), param_hint="--only/--skip") from exc
+    # Read the accepted findings before anything is sent: a broken file should stop the run early.
+    try:
+        accepted = load_accepted(accepted_path) if accepted_path is not None else {}
+    except ApifuzzError as exc:
+        _fail(exc)
 
     docker_only = require_docker_setting(require_docker)
     spec_is_url = spec.lower().startswith(("http://", "https://"))
@@ -380,8 +411,33 @@ def scan(
             _warn(f"warning: {line}")
         _fail(ApifuzzError(f"no request to {settings.base_url} got an answer, so nothing was tested. Is the API running?"))
 
+    # Mark the findings the team has accepted. Entries that match nothing are stale, and said so.
+    stale = apply_accepted(result.findings, accepted)
+    ran_everything = not (only or skip or methods or path_pattern or tags or auth) and not result.incomplete
+    if stale and ran_everything:  # on a partial scan a missing finding proves nothing
+        _warn(
+            f"note: {len(stale)} accepted finding(s) in {accepted_path} were not found by this scan "
+            f"(fixed, or the endpoint changed). Remove them: {', '.join(stale)}"
+        )
+
     # The tokens are replaced wherever they turn up in a report, not only in known headers.
     secrets = [settings.token_a, settings.token_b]
+    if write_accepted_path is not None:
+        try:
+            write_accepted(write_accepted_path, result.findings)
+        except OSError as exc:
+            _fail(ApifuzzError(f"could not write the accepted-findings file to {write_accepted_path}: {exc}"))
+        _err.print(
+            f"Accepted-findings file written to {write_accepted_path}. Fill in a reason for each entry "
+            "you accept and delete the rest; then pass it with --accepted.",
+            markup=False, highlight=False,
+        )
+    if sarif_path is not None:
+        try:
+            sarif_path.write_text(to_sarif(result, spec, secrets=secrets), encoding="utf-8")
+        except OSError as exc:
+            _fail(ApifuzzError(f"could not write the SARIF report to {sarif_path}: {exc}"))
+        _err.print(f"SARIF report written to {sarif_path}", markup=False, highlight=False)
     if html_path is not None:
         title = f"apifuzz report: {document.get('info', {}).get('title', 'API')}"
         try:
@@ -407,7 +463,8 @@ def scan(
             _warn(f"warning: {line}")
 
     threshold = None if fail_on is FailOn.never else Severity[fail_on.value.upper()]
-    if threshold is not None and any(f.severity >= threshold for f in result.findings):
+    # Accepted findings are reported but never fail the run.
+    if threshold is not None and any(f.severity >= threshold and not f.accepted for f in result.findings):
         raise typer.Exit(code=1)
 
 

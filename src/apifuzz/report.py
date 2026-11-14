@@ -106,11 +106,16 @@ def to_json(result: ScanResult, redact: bool = True, secrets: Iterable[str | Non
 
 def headline(result: ScanResult) -> str:
     """One line summing up a scan, e.g. "6 endpoints scanned · 3 findings (1 critical, 2 medium)"."""
-    e, n = result.endpoints_scanned, len(result.findings)
+    # Accepted findings (see accepted.py) are counted apart: the headline is about what is open.
+    open_findings = [f for f in result.findings if not f.accepted]
+    accepted = len(result.findings) - len(open_findings)
+    e, n = result.endpoints_scanned, len(open_findings)
     text = f"{e} endpoint{'' if e == 1 else 's'} scanned · {n} finding{'' if n == 1 else 's'}"
-    counts = [(sev, sum(f.severity is sev for f in result.findings)) for sev in sorted(Severity, reverse=True)]
+    counts = [(sev, sum(f.severity is sev for f in open_findings)) for sev in sorted(Severity, reverse=True)]
     parts = [f"{c} {sev.name.lower()}" for sev, c in counts if c]
-    return f"{text} ({', '.join(parts)})" if parts else text
+    if parts:
+        text = f"{text} ({', '.join(parts)})"
+    return f"{text} · {accepted} accepted" if accepted else text
 
 
 def findings_table(result: ScanResult) -> Table:
@@ -123,10 +128,18 @@ def findings_table(result: ScanResult) -> Table:
     table.add_column("Check", no_wrap=True)
     table.add_column("Endpoint")
     table.add_column("Finding")
-    for f in result.findings:
+    # Open findings first (already worst first), then the accepted ones, dimmed and without detail.
+    for f in sorted(result.findings, key=lambda f: f.accepted):
+        check = Text(f"{f.check}\n{f.owasp.split(' ', 1)[0]}" if f.owasp else f.check)  # e.g. "bola" + "API1:2023"
+        if f.accepted:
+            table.add_row(
+                Text(f"{f.severity}\naccepted", style="dim"), check, Text(f.endpoint),
+                Text(f"{f.title}\nAccepted: {f.accepted_reason}", style="dim"),
+            )
+            continue
         table.add_row(
             Text(str(f.severity), style=_STYLE[f.severity]),
-            Text(f"{f.check}\n{f.owasp.split(' ', 1)[0]}" if f.owasp else f.check),  # e.g. "bola" + "API1:2023"
+            check,
             Text(f.endpoint),  # Text(): show "[...]" in a path literally
             Text(f"{f.title}\n{f.detail}" + (f"\nFix: {f.remediation}" if f.remediation else "")),
         )
@@ -221,16 +234,23 @@ def to_html(
         out.append("<p><strong>This scan stopped early, so the results are partial.</strong> See the warnings.</p>")
     if not shown.findings:
         out.append("<p>No findings.</p>")
-    for sev in sorted(Severity, reverse=True):
-        group = [f for f in shown.findings if f.severity is sev]
+    # One group per severity for the open findings, then one group for the accepted ones.
+    groups = [
+        (sev.name, sev.name.title(), [f for f in shown.findings if f.severity is sev and not f.accepted])
+        for sev in sorted(Severity, reverse=True)
+    ]
+    groups.append(("muted", "Accepted", [f for f in shown.findings if f.accepted]))
+    for css, label, group in groups:
         if not group:
             continue
-        out.append(f"<h2 class='{sev.name}'>{sev.name.title()} ({len(group)})</h2>")
+        out.append(f"<h2 class='{css}'>{label} ({len(group)})</h2>")
         for f in group:
+            sev = f.severity
             out.append(
                 f"<details><summary><span class='sev {sev.name}'>{sev.name}</span>"
                 f"<code>{e(f.endpoint)}</code><span>{e(f.title)}</span>"
                 f"<span class='muted'>{e(f.check)}</span></summary><div class='body'>"
+                + (f"<p><strong>Accepted:</strong> {e(f.accepted_reason)}</p>" if f.accepted else "")
                 + (f"<p class='muted'>OWASP {e(f.owasp)}</p>" if f.owasp else "")
                 + f"<p>{e(f.detail)}</p>"
             )

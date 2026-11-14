@@ -41,6 +41,10 @@ class Finding(BaseModel):
     # What tells this finding apart from another by the same check on the same endpoint, e.g. the
     # field or parameter name. Empty when a check reports at most one finding per endpoint.
     key: str = ""
+    # True when the finding's fingerprint is in the file of accepted findings (--accepted). An
+    # accepted finding is still reported, but it no longer counts towards --fail-on.
+    accepted: bool = False
+    accepted_reason: str = ""  # why it was accepted, copied from that file
 
     # A short stable id built from the check, the endpoint and the key. It stays the same from one
     # run to the next, so two reports can be compared and a finding can be marked as accepted.

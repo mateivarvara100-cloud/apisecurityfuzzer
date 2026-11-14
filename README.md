@@ -6,8 +6,8 @@ give it two test accounts, and get a report a developer can act on: the endpoint
 the severity, and the fix.
 
 > **Status.** Five checks work today: `bola` (BOLA/IDOR by token swapping), `auth-required`,
-> `mass-assignment`, `rate-limit` and `injection` (SQL/NoSQL, detection only). SARIF output is
-> planned, not built. Every check is verified against the bundled VulnShop lab on each test run.
+> `mass-assignment`, `rate-limit` and `injection` (SQL/NoSQL, detection only). Reports come
+> as tables, JSON, HTML and SARIF (for GitHub code scanning). Every check is verified against the bundled VulnShop lab on each test run.
 
 ```text
 $ make demo
@@ -105,6 +105,9 @@ each one either a token (`APIFUZZ_TOKEN_A` / `_B`) or a username and password (`
 | `--fail-on` | Exit 1 if any finding is at least this severe: `info`…`critical`, or `never` (default `high`) |
 | `--json` | Print the report as JSON instead of tables |
 | `--json-out FILE` / `--html FILE` | Also write a JSON report, or a standalone HTML report (one file, no scripts) |
+| `--sarif FILE` | Also write a SARIF 2.1.0 report for GitHub code scanning. See [Use it in CI](#use-it-in-ci). |
+| `--accepted FILE` | A file of accepted findings: still reported, but they don't count towards `--fail-on` |
+| `--write-accepted FILE` | Write a starting accepted-findings file from this scan, with the reasons left to fill in |
 | `--redact` / `--no-redact` | Make reports safe to share (default: on). See [Reports](#reports). |
 
 **Exit codes:** `0` no findings at or above `--fail-on`; `1` findings at or above it; `2` usage
@@ -126,6 +129,79 @@ on its own, without scanning, with:
 ```bash
 apifuzz verify-docker http://localhost:8000
 ```
+
+## Use it in CI
+
+Two things make a scan usable as a CI gate: a report the platform can show, and a way to keep the
+job green for findings you already know about.
+
+**SARIF.** `--sarif FILE` writes the findings as SARIF 2.1.0, which GitHub code scanning reads.
+Each finding points at the endpoint's operation in the spec file, so it shows up next to the
+route's definition, with its severity (critical / high / medium / low) and a fingerprint that
+keeps it the same alert from run to run. Evidence is left out of the SARIF file; use `--html` or
+`--json-out` for that.
+
+**Accepted findings.** `--accepted FILE` names a JSON file of findings you have decided to live
+with. They are still listed in every report, marked as accepted, but no longer count towards
+`--fail-on`, so the job fails only for something new. Every entry needs a written reason:
+
+```json
+{
+  "accepted": [
+    {
+      "fingerprint": "3f2a9c0d1b7e4a55",
+      "check": "rate-limit",
+      "endpoint": "GET /search",
+      "reason": "Throttled at the gateway, which the scan does not go through."
+    }
+  ]
+}
+```
+
+`--write-accepted FILE` writes a starting file with this scan's findings and empty reasons. Fill
+in a reason for the ones you accept, delete the rest, and commit the file. A file with a missing
+reason is refused, and an entry that no longer matches any finding is pointed out so you can
+remove it.
+
+A workflow for your own repository (staging URL and test accounts come from repository secrets):
+
+```yaml
+name: API security scan
+on:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+  security-events: write   # lets the job upload SARIF to code scanning
+
+jobs:
+  apifuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install apifuzz
+      - name: Scan staging
+        env:
+          APIFUZZ_BASE_URL: ${{ secrets.STAGING_URL }}
+          APIFUZZ_TOKEN_A: ${{ secrets.APIFUZZ_TOKEN_A }}
+          APIFUZZ_TOKEN_B: ${{ secrets.APIFUZZ_TOKEN_B }}
+        run: >
+          apifuzz scan openapi.json --i-have-authorization
+          --sarif apifuzz.sarif --accepted apifuzz-accepted.json --fail-on high
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()   # upload the findings even when the scan step failed the job
+        with:
+          sarif_file: apifuzz.sarif
+```
+
+The scan step exits `1` when there is an open finding at or above `--fail-on`, which fails the
+job; the upload step still runs. Code scanning is free on public repositories and needs GitHub
+Advanced Security on private ones. Without it, drop the upload step and keep the exit code.
 
 ## Reports
 
@@ -278,6 +354,8 @@ The HTTP client is the only code that touches the target. Checks share one inter
 | `src/apifuzz/scanner.py` | Runs the chosen checks over the chosen endpoints, and collects findings and coverage. |
 | `src/apifuzz/finding.py` | The `Finding` record, its fingerprint, and the severity scale. |
 | `src/apifuzz/report.py` | Shows results as tables, JSON or a standalone HTML report, redacted. |
+| `src/apifuzz/sarif.py` | Writes the SARIF 2.1.0 report, pointing each finding at its operation in the spec. |
+| `src/apifuzz/accepted.py` | Reads and writes the file of accepted findings. |
 | `src/apifuzz/docker_verify.py` | `--require-docker`: confirms each target is a running local container. |
 | `src/apifuzz/cli.py` | The `apifuzz` command: `endpoints`, `checks`, `scan`, `verify-docker`. |
 | `src/apifuzz/errors.py` | The error types shown to the user as plain messages. |
@@ -318,7 +396,7 @@ and uploads. The published version is the one in `pyproject.toml`, not the git t
 
 ## What's next
 
-- SARIF 2.1.0 output for GitHub code scanning, and a file of accepted findings.
+- A small hosted demo (Phase 4), after the spec download is sent through the allowlist too.
 - Wider injection coverage: path parameters and headers (today's check covers query-string
   parameters and the JSON body fields of login/search endpoints, including a NoSQL operator-object
   probe).

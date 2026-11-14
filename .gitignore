@@ -28,3 +28,4 @@ out/
 .idea/
 report.html
 report.json
+report.sarif
