@@ -27,6 +27,12 @@ def _finding(check="bola", severity=Severity.CRITICAL, endpoint="GET /orders/{id
     return Finding(check=check, severity=severity, title="t", endpoint=endpoint, detail="d", **extra)
 
 
+def _flat(text: str) -> str:
+    """Console output on one line. The terminal wraps long lines (a temp path can be over 100
+    character   s), so a phrase must not be looked for in the raw output."""
+    return " ".join(text.split())
+
+
 def _lab_scan(base, *extra):
     return runner.invoke(cli.app, ["scan", str(LAB_SPEC), "--i-have-authorization", "--base-url", base, *extra])
 
@@ -243,7 +249,7 @@ class TestCli:
 
         # Without reasons the file is refused before any request is sent.
         refused = _lab_scan(lab_api, "--accepted", str(accepted))
-        assert refused.exit_code == 2 and "has no reason" in refused.output
+        assert refused.exit_code == 2 and "has no reason" in _flat(refused.output)
 
         data = json.loads(accepted.read_text(encoding="utf-8"))
         for entry in data["accepted"]:
@@ -269,7 +275,7 @@ class TestCli:
         assert result.exit_code == 1
         report = json.loads(result.stdout)
         assert [f["endpoint"] for f in report["findings"] if f["accepted"]] == ["GET /search"]
-        assert "1 accepted finding(s)" in result.stderr and "0000000000000000" in result.stderr
+        assert "1 accepted finding(s)" in _flat(result.stderr) and "0000000000000000" in result.stderr
 
     # On a partial scan (here: one check only) a missing finding proves nothing, so no stale note.
     def test_no_stale_note_on_a_filtered_scan(self, lab_api, lab_accounts, tmp_path):
@@ -278,7 +284,7 @@ class TestCli:
 
         result = _lab_scan(lab_api, "--only", "auth-required", "--accepted", str(accepted), "--json")
 
-        assert "accepted finding(s)" not in result.stderr
+        assert "accepted finding(s)" not in _flat(result.stderr)
 
 
 # ---------------------------------------------------------------------------------------------
