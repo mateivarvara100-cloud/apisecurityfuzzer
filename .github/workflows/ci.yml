@@ -59,6 +59,8 @@ jobs:
           found = {(f["check"], f["endpoint"]) for f in report["findings"]}
           assert ("bola", "GET /orders/{id}") in found, found
           assert ("auth-required", "GET /users/{id}") in found, found
+          assert ("injection", "GET /search") in found, found
+          assert ("injection", "POST /login") in found, found
           print("demo scan OK:", report["requests_sent"], "requests,", len(report["findings"]), "findings")
           PY
       - uses: actions/upload-artifact@v4

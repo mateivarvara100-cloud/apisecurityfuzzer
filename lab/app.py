@@ -13,7 +13,9 @@ Ground truth (what apifuzz should and should not report):
   GET /users/{id}     auth-required  no login check at all
   PATCH /users/{id}   mass-assignment  saves every field in the body, including "role"
   POST /login         rate-limit     any number of login attempts is accepted
+  POST /login         injection      username is pasted into a SQL user lookup (password still checked)
   GET /search         rate-limit     any number of searches is accepted
+  GET /search?q=      injection      q is pasted into a SQL query string (also rate-limit, above)
   GET /me             nothing        correctly protected (false-positive guard)
   GET /orders         nothing        lists only the caller's own orders
   POST /orders        nothing        saves only the fields the spec allows (DELETE cleans up)
@@ -26,6 +28,7 @@ With LAB_HARDENED=1 every planted flaw is fixed, and apifuzz must report nothing
 
 import json
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -143,6 +146,49 @@ class Handler(BaseHTTPRequestHandler):
         rest = path[len(prefix):]
         return int(rest) if rest.isdigit() else None
 
+    def _lookup_user(self, username: str) -> int | None:
+        """Find a user id by name, using a real (in-memory) SQLite query.
+
+        The two modes differ only in how `username` reaches the query. The password is checked
+        separately by the caller, so the planted flaw is a detectable injection point, not a way
+        to log in without the password.
+        """
+        db = sqlite3.connect(":memory:")
+        try:
+            db.execute("CREATE TABLE users (id INTEGER, name TEXT)")
+            db.executemany("INSERT INTO users (id, name) VALUES (?, ?)", [(uid, u["name"]) for uid, u in USERS.items()])
+            if hardened():
+                # Fixed: `username` is bound as a parameter, so it is only ever data.
+                rows = db.execute("SELECT id FROM users WHERE lower(name) = lower(?)", (username,)).fetchall()
+            else:
+                # PLANTED (injection): `username` is pasted into the query text, so a quote breaks
+                # its syntax (surfacing a database error) or changes which rows it selects.
+                rows = db.execute("SELECT id FROM users WHERE lower(name) = lower('" + username + "')").fetchall()
+            return rows[0][0] if rows else None
+        finally:
+            db.close()
+
+    def _search_products(self, q: str) -> list[str]:
+        """Find products whose name contains `q`, using a real (in-memory) SQLite query.
+
+        The query runs against a throwaway database built fresh for the request, so the lab still
+        keeps no state on disk. The two modes differ only in how `q` reaches the query:
+        """
+        db = sqlite3.connect(":memory:")
+        try:
+            db.execute("CREATE TABLE products (name TEXT)")
+            db.executemany("INSERT INTO products (name) VALUES (?)", [(name,) for name in PRODUCTS])
+            if hardened():
+                # Fixed: `q` is bound as a parameter, so it is only ever data, never query text.
+                rows = db.execute("SELECT name FROM products WHERE name LIKE ?", (f"%{q}%",)).fetchall()
+            else:
+                # PLANTED (injection): `q` is pasted straight into the query text. A `q` that closes
+                # the quote changes what the query selects (boolean injection) or breaks its syntax.
+                rows = db.execute("SELECT name FROM products WHERE name LIKE '%" + q + "%'").fetchall()
+            return [row[0] for row in rows]
+        finally:
+            db.close()
+
     # --- routes ----------------------------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802
@@ -215,8 +261,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/search":
             if self._too_many("/search"):
                 return None
-            q = (parse_qs(url.query).get("q") or [""])[0].lower()
-            return self._send(200, [p for p in PRODUCTS if q in p])
+            q = (parse_qs(url.query).get("q") or [""])[0]
+            try:
+                return self._send(200, self._search_products(q))
+            except sqlite3.Error as exc:
+                # PLANTED (injection): the raw database error is handed back to the caller. This
+                # both confirms the input reached the query and leaks the engine. The hardened
+                # query is parameterized, so it never reaches this branch.
+                return self._send(500, {"error": f"SQL error: {exc}"})
 
         return self._send(404, {"error": "not found"})
 
@@ -229,10 +281,15 @@ class Handler(BaseHTTPRequestHandler):
             if self._too_many("/login"):
                 return None
             data = self._body()
-            for uid, user in USERS.items():
-                if user["name"].lower() == str(data.get("username", "")).lower() and user["password"] == data.get("password"):
-                    token = next(t for t, owner in TOKENS.items() if owner == uid)
-                    return self._send(200, {"token": token})
+            try:
+                uid = self._lookup_user(str(data.get("username", "")))
+            except sqlite3.Error as exc:
+                # PLANTED (injection): the raw database error from the user lookup is handed back
+                # to the caller. The hardened lookup is parameterized, so it never errors here.
+                return self._send(500, {"error": f"SQL error: {exc}"})
+            if uid is not None and USERS[uid]["password"] == data.get("password"):
+                token = next(t for t, owner in TOKENS.items() if owner == uid)
+                return self._send(200, {"token": token})
             return self._send(401, {"error": "bad credentials"})
 
         if path == "/orders":

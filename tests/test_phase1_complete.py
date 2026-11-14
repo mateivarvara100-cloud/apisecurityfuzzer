@@ -146,8 +146,12 @@ class TestLabGroundTruth:
             ("mass-assignment", "PATCH /users/{id}", "CRITICAL"),
             ("rate-limit", "POST /login", "HIGH"),
             ("rate-limit", "GET /search", "MEDIUM"),
+            ("injection", "GET /search", "HIGH"),
+            ("injection", "POST /login", "HIGH"),
         }
-        assert {f["owasp"].split()[0] for f in report["findings"]} == {"API1:2023", "API2:2023", "API3:2023", "API4:2023"}
+        assert {f["owasp"].split()[0] for f in report["findings"]} == {
+            "API1:2023", "API2:2023", "API3:2023", "API4:2023", "API8:2019",
+        }
         # The mass-assignment probe put Alice's role back: the scan leaves the lab as it found it.
         (role,) = [f for f in report["findings"] if f["check"] == "mass-assignment"]
         assert role["key"] == "role" and "put back afterwards" in role["detail"]
@@ -176,7 +180,8 @@ class TestLabGroundTruth:
 
         report = json.loads(result.stdout)
         assert [(f["check"], f["endpoint"]) for f in report["findings"]] == [
-            ("auth-required", "GET /users/{id}"), ("rate-limit", "POST /login"), ("rate-limit", "GET /search"),
+            ("auth-required", "GET /users/{id}"), ("injection", "POST /login"), ("injection", "GET /search"),
+            ("rate-limit", "POST /login"), ("rate-limit", "GET /search"),
         ]
         assert "bola check was skipped" in result.stderr
 

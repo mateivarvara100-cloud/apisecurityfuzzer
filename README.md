@@ -5,24 +5,25 @@ describes for common OWASP API Top 10 flaws. You point it at an API you are auth
 give it two test accounts, and get a report a developer can act on: the endpoint, the evidence,
 the severity, and the fix.
 
-> **Status.** Four checks work today: `bola` (BOLA/IDOR by token swapping), `auth-required`,
-> `mass-assignment` and `rate-limit`. Injection (SQL/NoSQL) and SARIF output are planned, not
-> built. Every check is verified against the bundled VulnShop lab on each test run.
+> **Status.** Five checks work today: `bola` (BOLA/IDOR by token swapping), `auth-required`,
+> `mass-assignment`, `rate-limit` and `injection` (SQL/NoSQL, detection only). SARIF output is
+> planned, not built. Every check is verified against the bundled VulnShop lab on each test run.
 
 ```text
 $ make demo
 ...
-   12 endpoints scanned · 5 findings (2 critical, 2 high, 1 medium) · 4 checks run
+   12 endpoints scanned · 7 findings (2 critical, 4 high, 1 medium) · 5 checks run
                      What was tested
 +--------------------------------------------------------+
 | Check           | Tested | Not tested | Not applicable |
 |-----------------+--------+------------+----------------|
 | auth-required   |      7 |          0 |              5 |
 | bola            |      4 |          0 |              8 |
+| injection       |      2 |          0 |             10 |
 | mass-assignment |      2 |          0 |             10 |
 | rate-limit      |      2 |          0 |             10 |
 +--------------------------------------------------------+
-        100 requests sent to http://localhost:8000
+        111 requests sent to http://localhost:8000
 ```
 
 ## What it checks
@@ -33,6 +34,7 @@ $ make demo
 | `auth-required` | API2:2023 | Calls endpoints the spec says need a login with no credentials, and reports the ones that answer. |
 | `mass-assignment` | API3:2023 | Sends an update or create with one extra field the spec doesn't list (such as `role`) and reads the object back to see if it was saved. |
 | `rate-limit` | API4:2023 | Sends a small burst of identical requests to login and search endpoints and looks for a `429` or rate-limit headers. |
+| `injection` | API8:2019 | Sends inert marker values to query-string parameters and to JSON body fields of login/search endpoints, and watches the response *shape* for a database error, an always-true/always-false differential, or an accepted NoSQL operator object. Detection only. |
 
 All probes are meant to detect a flaw, not to use it. Details for each check are under
 [How each check works](#how-each-check-works).
@@ -185,6 +187,17 @@ is HIGH and a search endpoint MEDIUM. Login attempts use made-up credentials for
 doesn't exist. Endpoints that create data or send messages (sign-up, password reset) are never
 burst. This is detection, not a load test: the burst is capped at 50.
 
+**`injection`.** On one input at a time it sends a benign baseline value, then a value with one
+extra quote (`apifuzz'`), then an always-true and an always-false value (`apifuzz' OR '1'='1' -- `
+/ `apifuzz' AND '1'='2' -- `). A database error in the answer to the quote, or a result set that
+differs between the always-true and always-false values, means the input is reaching a query
+unescaped — HIGH, once the signal repeats on a second request. Two kinds of input are probed:
+query-string parameters on GET/HEAD endpoints, and JSON body fields on endpoints that read or
+authenticate (login / search / lookup / query shaped) — for body fields it also sends an operator
+object (`{"$ne": …}`) where a scalar is expected, to catch NoSQL operator injection. Create and
+update endpoints are never probed with a body, so the check can neither create nor change data;
+the markers are inert, and it counts records, never reads their contents.
+
 ## Lab target (VulnShop)
 
 `lab/` contains VulnShop, a tiny deliberately vulnerable API (spec:
@@ -197,8 +210,8 @@ false positive.
 | `GET /orders/{id}` | Planted: checks the login but not the order's owner | `bola` (CRITICAL) |
 | `GET /users/{id}` | Planted: doesn't check the login at all | `auth-required` (HIGH) |
 | `PATCH /users/{id}` | Planted: saves every field in the body, including `role` | `mass-assignment` (CRITICAL) |
-| `POST /login` | Planted: accepts any number of attempts | `rate-limit` (HIGH) |
-| `GET /search` | Planted: accepts any number of searches | `rate-limit` (MEDIUM) |
+| `POST /login` | Planted: accepts any number of attempts, and pastes `username` into a SQL user lookup | `rate-limit` (HIGH), `injection` (HIGH) |
+| `GET /search` | Planted: accepts any number of searches, and pastes `q` into a SQL query | `rate-limit` (MEDIUM), `injection` (HIGH) |
 | `GET /me`, `GET /orders` | Correct: only the caller's own data | nothing |
 | `POST /orders`, `DELETE /orders/{id}` | Correct: saves only the fields the spec allows; you can delete only your own orders | nothing |
 | `GET /products/{id}` | Correct: shared on purpose with every logged-in user | nothing |
@@ -240,7 +253,7 @@ flowchart LR
     settings --> session[session_manager]
     model --> scanner
     session --> scanner
-    scanner --> checks["checks: bola, auth-required,<br/>mass-assignment, rate-limit"]
+    scanner --> checks["checks: bola, auth-required,<br/>mass-assignment, rate-limit, injection"]
     checks --> client[http_client<br/>allowlist, limits]
     client --> target[(API under test)]
     scanner --> report[report: table, JSON, HTML]
@@ -290,5 +303,7 @@ services.
 
 ## What's next
 
-- Injection check (SQL/NoSQL), the last of the four planned categories.
 - SARIF 2.1.0 output for GitHub code scanning, and a file of accepted findings.
+- Wider injection coverage: path parameters and headers (today's check covers query-string
+  parameters and the JSON body fields of login/search endpoints, including a NoSQL operator-object
+  probe).
