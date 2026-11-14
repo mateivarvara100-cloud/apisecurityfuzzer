@@ -12,7 +12,9 @@ import httpx  # HTTP library; used here only to download a spec when given a URL
 from prance import ResolvingParser, ValidationError  # prance parses, fills in $refs, validates
 from prance.util.url import ResolutionError  # what prance raises when a $ref points nowhere
 
+from apifuzz import __version__
 from apifuzz.errors import SpecError  # our error type for "something is wrong with the spec"
+from apifuzz.http_client import Allowlist
 
 # How many seconds to wait for a spec download before giving up.
 _FETCH_TIMEOUT = 15.0
@@ -24,17 +26,25 @@ _PLACEHOLDER_URL = re.compile(r"file:///[^#\s\"']*__placeholder_url__\.yaml")
 
 
 def load_spec(
-    source: str, *, client: httpx.Client | None = None, follow_redirects: bool = True
+    source: str,
+    *,
+    client: httpx.Client | None = None,
+    follow_redirects: bool = True,
+    allowlist: Allowlist | None = None,
 ) -> dict[str, Any]:
     """Return the validated spec at `source` (a file path or http(s) URL) with internal $refs inlined.
 
     Raises SpecError with a readable message for anything wrong with the spec.
     `client` is only used for URL sources and exists so tests can inject a mock transport.
-    `follow_redirects=False` makes a redirected spec URL an error. `scan --require-docker` uses
-    it, so a spec on a verified container can't send the download to some other host.
+
+    Downloading a spec is a request like any other, so it can be held to the same rules as scan
+    traffic. `allowlist`, when given, must permit the URL or AllowlistError is raised before
+    anything is sent. `follow_redirects=False` makes a redirected spec URL an error, so the
+    download can't be sent on to a host nobody approved. `scan` uses both; `endpoints`, which
+    sends nothing but this one download, uses neither.
     """
     # Step 1: get the raw text, from disk or from the network.
-    text = _read_source(source, client, follow_redirects)
+    text = _read_source(source, client, follow_redirects, allowlist)
     # Step 2: an empty file would make prance crash with a confusing internal error, so catch it here.
     if not text.strip():
         raise SpecError(f"{source}: the spec is empty")
@@ -59,9 +69,13 @@ def load_spec(
     return parser.specification
 
 
-def _read_source(source: str, client: httpx.Client | None, follow_redirects: bool = True) -> str:
+def _read_source(
+    source: str, client: httpx.Client | None, follow_redirects: bool = True, allowlist: Allowlist | None = None
+) -> str:
     # Anything starting with http:// or https:// is downloaded; everything else is a file path.
     if source.lower().startswith(("http://", "https://")):
+        if allowlist is not None:
+            allowlist.check(source)  # raises AllowlistError before anything is sent
         return _fetch(source, client, follow_redirects)
     # "ftp://...", "file://..." etc. would otherwise be treated as an odd file name.
     # (A Windows path like C:\spec.json has no "://", so it isn't caught here.)
@@ -87,11 +101,19 @@ def _fetch(url: str, client: httpx.Client | None, follow_redirects: bool = True)
     # Remember whether WE create the client: we must only close a client we created ourselves,
     # never one a test passed in.
     owns_client = client is None
-    # Following redirects is fine by default because we're only downloading a document.
-    # (The scanner's HttpClient never does, for safety.)
-    client = client or httpx.Client(timeout=_FETCH_TIMEOUT, follow_redirects=follow_redirects)
+    # Following redirects is allowed only when the caller says so (the scanner's HttpClient never
+    # does). The User-Agent names the tool, as scan requests do.
+    client = client or httpx.Client(
+        timeout=_FETCH_TIMEOUT, follow_redirects=follow_redirects, headers={"User-Agent": f"apifuzz/{__version__}"}
+    )
     try:
         response = client.get(url)
+        if response.is_redirect:
+            # Only reached when redirects are not followed: say where it points instead of "HTTP 302".
+            raise SpecError(
+                f"{url}: the spec URL redirects to {response.headers.get('location', 'another address')} "
+                f"(HTTP {response.status_code}). Redirects are not followed here; use the final URL."
+            )
         response.raise_for_status()  # turns a 4xx/5xx answer into an HTTPStatusError exception
         return response.text
     except httpx.HTTPStatusError as exc:

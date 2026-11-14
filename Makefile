@@ -16,4 +16,5 @@ demo: lab-up
 
 test:
 	ruff check .
-	pytest
+	mypy
+	pytest --cov

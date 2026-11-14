@@ -93,9 +93,9 @@ def _filter_endpoints(
     ]
 
 
-def _load_or_exit(spec: str, *, follow_redirects: bool = True) -> dict:
+def _load_or_exit(spec: str, *, follow_redirects: bool = True, allowlist: Allowlist | None = None) -> dict:
     try:
-        return load_spec(spec, follow_redirects=follow_redirects)
+        return load_spec(spec, follow_redirects=follow_redirects, allowlist=allowlist)
     except ApifuzzError as exc:
         _fail(exc)
 
@@ -355,7 +355,16 @@ def scan(
             verify_targets(spec, [])
         except ApifuzzError as exc:
             _fail(exc)
-    document = _load_or_exit(spec, follow_redirects=not docker_only)
+    # The download obeys the scan's rules too: it goes only to the host you typed (or one named
+    # with --allow / --base-url), and a redirect is refused instead of followed, so the spec's
+    # server can't send the download somewhere else.
+    spec_allowlist = None
+    if spec_is_url:
+        try:
+            spec_allowlist = Allowlist([host_entry(spec), *(allow or []), *([host_entry(base_url)] if base_url else [])])
+        except (ApifuzzError, ValueError) as exc:
+            _fail(exc)
+    document = _load_or_exit(spec, follow_redirects=False, allowlist=spec_allowlist)
     try:
         settings = resolve_settings(
             spec=document, base_url=base_url, allowlist=allow, require_docker=docker_only,

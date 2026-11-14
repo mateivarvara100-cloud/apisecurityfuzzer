@@ -115,12 +115,12 @@ class RateLimit(Check):
                       for p in endpoint.parameters if p.location == "query" and p.required}
 
         burst = max(2, min(ctx.settings.burst, MAX_BURST))
-        first = last = None
+        sent: list[Exchange] = []
         timings: list[float] = []
         started = time.perf_counter()
         for _ in range(burst):
             last = ctx.client.request(endpoint.method, url, headers=headers, params=params or None, json=body)
-            first = first or last
+            sent.append(last)
             timings.append(last.elapsed_ms)
             sign = _throttle_sign(last)
             if sign:
@@ -137,6 +137,7 @@ class RateLimit(Check):
         if _slowed_down(timings):
             return  # answers got much slower as the burst went on: the endpoint delays repeats
         seconds = time.perf_counter() - started
+        first, last = sent[0], sent[-1]
         statuses = f"HTTP {first.response.status_code}"
         if kind == "login":
             severity, title = Severity.HIGH, "Login endpoint has no rate limit"

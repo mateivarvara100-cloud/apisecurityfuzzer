@@ -30,6 +30,9 @@ class ScanContext:
         self.endpoints: list[Endpoint] = endpoints or []
         # Scratch space shared across one scan, e.g. ids a check collected once and reuses.
         self.cache: dict[str, object] = {}
+        # Test objects a check created on the target and could not delete again, one line each.
+        # The scan result lists them, so nothing is left behind without being said.
+        self.leftovers: list[str] = []
         # What each check did with each endpoint: {(check id, "GET /path"): (status, reason)}.
         # The report turns this into a coverage table, so "not tested" never looks like "safe".
         self.outcomes: dict[tuple[str, str], tuple[str, str]] = {}

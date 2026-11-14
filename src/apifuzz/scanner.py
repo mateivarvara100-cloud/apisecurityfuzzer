@@ -78,7 +78,7 @@ def run_scan(endpoints: list[Endpoint], checks: list[type[Check]], ctx: ScanCont
         result.errors.append(f"scan stopped early: {exc}")
         result.incomplete = True
     # Anything a check created on the target and could not remove again is said out loud.
-    result.errors.extend(f"left behind on the target: {line}" for line in ctx.cache.get("leftovers", []))  # type: ignore[union-attr]
+    result.errors.extend(f"left behind on the target: {line}" for line in ctx.leftovers)
     # Stable sort: worst severity first, ties keep the order the checks produced them in.
     result.findings.sort(key=lambda f: f.severity, reverse=True)
     result.requests_sent = ctx.client.requests_sent

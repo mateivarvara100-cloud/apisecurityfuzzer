@@ -180,7 +180,7 @@ def _origin(url: str) -> tuple[str, str | None, int | None]:
 
 
 def _is_http_url(text: str | None) -> bool:
-    return bool(text) and text.lower().startswith(("http://", "https://"))
+    return text is not None and text.lower().startswith(("http://", "https://"))
 
 
 def _confirmed_spec_server(server: str | None, spec_source: str | None, entries: list[str]) -> str | None:
@@ -192,14 +192,16 @@ def _confirmed_spec_server(server: str | None, spec_source: str | None, entries:
     """
     if not server:
         return None
+    # Where the spec was downloaded from, or None when it is a local file.
+    spec_url = spec_source if spec_source is not None and _is_http_url(spec_source) else None
     if server.startswith("/"):  # a relative server such as "/api/v1": relative to where the spec lives
-        if not _is_http_url(spec_source):
+        if spec_url is None:
             raise ConfigError(
                 f"the spec's server is the relative path {server!r}, so the host is unknown: pass --base-url"
             )
-        server = urljoin(spec_source, server)
+        server = urljoin(spec_url, server)
     host_entry(server)  # raises ConfigError unless it is an http(s) URL with a host
-    if _is_http_url(spec_source) and _origin(spec_source) == _origin(server):
+    if spec_url is not None and _origin(spec_url) == _origin(server):
         return server
     if Allowlist(entries).permits(server):
         return server

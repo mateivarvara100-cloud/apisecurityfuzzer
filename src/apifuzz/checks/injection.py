@@ -32,11 +32,12 @@ What is probed, and what is left alone:
 Severity: HIGH. A confirmed injection point is among the most serious API flaws.
 """
 
+import json
 import re
 from collections.abc import Callable, Iterator
 
 from apifuzz.checks.base import NOT_TESTED, TESTED, Check, ScanContext, fill_path, sample_body
-from apifuzz.endpoint_model import Endpoint
+from apifuzz.endpoint_model import Endpoint, Parameter, RequestField
 from apifuzz.finding import Finding, Severity
 from apifuzz.http_client import Exchange
 
@@ -71,6 +72,14 @@ _DB_ERROR = re.compile(
 _PROBEABLE_TYPES = (None, "string", "integer", "number")  # text or numbers, or a type the spec omitted
 
 
+class _Unhandled:
+    """What _probe returns when even a benign value was not handled, so there is nothing to
+    compare a probe against. Distinct from None, which means "probed, and clean"."""
+
+
+_UNHANDLED = _Unhandled()
+
+
 def _sample(param_type: str | None) -> str:
     return "1" if param_type in ("integer", "number") else _MARKER
 
@@ -83,8 +92,6 @@ def _result_size(exchange: Exchange) -> int | None:
     compares only status codes, never body length, so a payload echoed into the body can't be
     mistaken for a bigger result set.
     """
-    import json
-
     try:
         body = json.loads(exchange.response.body)
     except ValueError:
@@ -143,12 +150,12 @@ class Injection(Check):
 
     # --- query-string parameters ---------------------------------------------------------------
 
-    def _query_targets(self, endpoint: Endpoint) -> list:
+    def _query_targets(self, endpoint: Endpoint) -> list[Parameter]:
         if endpoint.method not in ("GET", "HEAD"):
             return []
         return [p for p in endpoint.parameters if p.location == "query" and p.type in _PROBEABLE_TYPES]
 
-    def _run_query(self, endpoint: Endpoint, ctx: ScanContext, headers) -> Iterator[Finding]:
+    def _run_query(self, endpoint: Endpoint, ctx: ScanContext, headers: dict[str, str] | None) -> Iterator[Finding]:
         targets = self._query_targets(endpoint)[:_MAX_FIELDS]
         if not targets:
             return
@@ -161,7 +168,7 @@ class Injection(Check):
                 return ctx.client.request(endpoint.method, url, headers=headers, params={**base, name: value})
 
             outcome = self._probe(endpoint, param.name, "query parameter", send, allow_nosql=False)
-            if outcome is _UNHANDLED:
+            if isinstance(outcome, _Unhandled):
                 ctx.record(self.id, endpoint, NOT_TESTED, f"a benign value for {param.name!r} was not handled, which settles nothing")
                 continue
             tested = True
@@ -172,7 +179,7 @@ class Injection(Check):
 
     # --- JSON body fields (read/auth endpoints only) -------------------------------------------
 
-    def _body_targets(self, endpoint: Endpoint) -> list:
+    def _body_targets(self, endpoint: Endpoint) -> list[RequestField]:
         if endpoint.method not in ("POST", "PUT", "PATCH") or not self._is_query_shaped(endpoint):
             return []
         return [f for f in endpoint.request_fields if f.type in _PROBEABLE_TYPES]
@@ -183,7 +190,7 @@ class Injection(Check):
             words |= {w.lower() for w in re.findall(r"[A-Za-z][a-z]+|[A-Z]+(?![a-z])", endpoint.operation_id)}
         return bool(words & _BODY_WORDS)
 
-    def _run_body(self, endpoint: Endpoint, ctx: ScanContext, headers) -> Iterator[Finding]:
+    def _run_body(self, endpoint: Endpoint, ctx: ScanContext, headers: dict[str, str] | None) -> Iterator[Finding]:
         targets = self._body_targets(endpoint)[:_MAX_FIELDS]
         if not targets:
             return
@@ -196,7 +203,7 @@ class Injection(Check):
                 return ctx.client.request(endpoint.method, url, headers=headers, json={**base, name: value})
 
             outcome = self._probe(endpoint, field.name, "body field", send, allow_nosql=True)
-            if outcome is _UNHANDLED:
+            if isinstance(outcome, _Unhandled):
                 ctx.record(self.id, endpoint, NOT_TESTED, f"a benign value for {field.name!r} was not handled, which settles nothing")
                 continue
             tested = True
@@ -209,7 +216,7 @@ class Injection(Check):
 
     def _probe(
         self, endpoint: Endpoint, name: str, where: str, send: Callable[[object], Exchange], *, allow_nosql: bool
-    ) -> "Finding | object | None":
+    ) -> Finding | _Unhandled | None:
         """Probe one input. Returns a Finding, None (clean), or _UNHANDLED (no usable baseline)."""
         baseline = send(_MARKER)
         if not _handled(baseline):
@@ -283,7 +290,3 @@ class Injection(Check):
             evidence=evidence,
         )
 
-
-# Sentinel returned by _probe when a benign baseline value was not even handled, so there is
-# nothing to compare a probe against. Distinct from None (probed, clean).
-_UNHANDLED = object()

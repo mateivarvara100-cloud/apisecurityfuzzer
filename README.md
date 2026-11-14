@@ -69,7 +69,9 @@ apifuzz scan openapi.json --i-have-authorization --base-url https://staging.exam
 ```
 
 `scan` refuses to run without `--i-have-authorization`. It contacts only the base URL's host,
-plus any `--allow host[:port]` entries, and never follows redirects.
+plus any `--allow host[:port]` entries, and never follows redirects. A spec given as a URL is
+downloaded under the same rules: only from the host you typed, and a redirect is an error that
+names where it points.
 
 **The target.** Pass `--base-url` or set `APIFUZZ_BASE_URL`. Without either, the spec's `servers`
 entry is used only if the spec was downloaded from that same host, or you listed the host with
@@ -364,8 +366,9 @@ The HTTP client is the only code that touches the target. Checks share one inter
 ## Develop
 
 ```bash
-ruff check .
-pytest
+ruff check .      # style and likely bugs
+mypy              # types
+pytest --cov      # tests, with a coverage report (fails under 90%)
 ```
 
 `uv.lock` pins the exact dependency versions; `uv sync --extra dev` installs from it.
@@ -396,7 +399,7 @@ and uploads. The published version is the one in `pyproject.toml`, not the git t
 
 ## What's next
 
-- A small hosted demo (Phase 4), after the spec download is sent through the allowlist too.
+- A small hosted demo (Phase 4): the same engine behind a login, limited to approved targets.
 - Wider injection coverage: path parameters and headers (today's check covers query-string
   parameters and the JSON body fields of login/search endpoints, including a NoSQL operator-object
   probe).

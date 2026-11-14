@@ -3,16 +3,20 @@
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
 import apifuzz.cli as cli
 from apifuzz import __version__
 from apifuzz.accepted import AcceptedFileError, apply_accepted, load_accepted, write_accepted
+from apifuzz.errors import AllowlistError, SpecError
 from apifuzz.finding import Finding, Severity
+from apifuzz.http_client import Allowlist
 from apifuzz.report import findings_table, headline, to_html
 from apifuzz.sarif import _operation_line, to_sarif
 from apifuzz.scanner import ScanResult
+from apifuzz.spec_loader import load_spec
 
 ROOT = Path(__file__).resolve().parent.parent
 LAB_SPEC = ROOT / "lab" / "openapi.json"
@@ -275,3 +279,47 @@ class TestCli:
         result = _lab_scan(lab_api, "--only", "auth-required", "--accepted", str(accepted), "--json")
 
         assert "accepted finding(s)" not in result.stderr
+
+
+# ---------------------------------------------------------------------------------------------
+# the spec download obeys the scan's rules
+
+
+class TestSpecDownload:
+    SPEC = json.dumps({"openapi": "3.0.3", "info": {"title": "t", "version": "1"}, "paths": {}})
+
+    # A host that isn't on the allowlist is refused before anything is sent.
+    def test_allowlist_is_checked_first(self):
+        transport = httpx.MockTransport(lambda r: pytest.fail("sent a request"))
+
+        with httpx.Client(transport=transport) as client, pytest.raises(AllowlistError, match="not on the allowlist"):
+            load_spec("http://other.test/openapi.json", client=client, allowlist=Allowlist(["api.test"]))
+
+    def test_allowed_host_is_downloaded(self):
+        transport = httpx.MockTransport(lambda r: httpx.Response(200, text=self.SPEC))
+
+        with httpx.Client(transport=transport) as client:
+            spec = load_spec("http://api.test/openapi.json", client=client, allowlist=Allowlist(["api.test"]))
+
+        assert spec["info"]["title"] == "t"
+
+    # A redirect is an error that says where it points, so the user can decide to use that URL.
+    def test_redirect_names_its_target(self):
+        transport = httpx.MockTransport(lambda r: httpx.Response(302, headers={"Location": "http://elsewhere.test/spec"}))
+
+        with httpx.Client(transport=transport) as client, pytest.raises(SpecError, match=r"redirects to http://elsewhere\.test/spec"):
+            load_spec("http://api.test/openapi.json", client=client)
+
+    # The lab serves its spec from /app/openapi.json in the container; in-process, point it at the repo's copy.
+    @pytest.fixture
+    def lab_serves_spec(self, clean_env):
+        clean_env.setenv("SPEC_PATH", str(LAB_SPEC))
+
+    # Scanning from the lab's own spec URL works: the host the user typed is the one allowed.
+    def test_scan_from_a_spec_url(self, lab_serves_spec, lab_api, lab_accounts):
+        result = runner.invoke(
+            cli.app, ["scan", f"{lab_api}/openapi.json", "--i-have-authorization", "--only", "auth-required", "--json"]
+        )
+
+        assert result.exit_code == 1, result.output
+        assert [f["endpoint"] for f in json.loads(result.stdout)["findings"]] == ["GET /users/{id}"]

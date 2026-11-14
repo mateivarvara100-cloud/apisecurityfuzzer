@@ -277,7 +277,6 @@ class MassAssignment(Check):
                 evidence=[write, readback, cleanup],
             )
         if leftovers:
-            notes = ctx.cache.setdefault("leftovers", [])
-            notes.append(  # type: ignore[attr-defined]
+            ctx.leftovers.append(
                 f"{endpoint.method} {endpoint.path}: test objects could not be deleted, ids {', '.join(leftovers)}"
             )

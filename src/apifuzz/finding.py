@@ -48,7 +48,7 @@ class Finding(BaseModel):
 
     # A short stable id built from the check, the endpoint and the key. It stays the same from one
     # run to the next, so two reports can be compared and a finding can be marked as accepted.
-    @computed_field  # included in the JSON output
+    @computed_field  # type: ignore[prop-decorator]  # included in the JSON output (mypy can't follow this pairing)
     @property
     def fingerprint(self) -> str:
         return hashlib.sha256(f"{self.check}|{self.endpoint}|{self.key}".encode()).hexdigest()[:16]
