@@ -36,6 +36,9 @@ jobs:
     # ground-truth demo are exercised, not just the in-process tests.
     name: demo scan (Docker)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # lets this job upload the lab's SARIF report to code scanning
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,7 +54,12 @@ jobs:
           APIFUZZ_USER_B=bob APIFUZZ_PASSWORD_B=bob \
           apifuzz scan http://localhost:8000/openapi.json \
             --i-have-authorization --require-docker \
-            --json-out report.json --html report.html --sarif report.sarif --fail-on never
+            --json-out report.json --html report.html --fail-on never
+      - name: Scan again from the spec file, for SARIF
+        # SARIF points each finding at a line of the spec, so this scan reads the spec from the
+        # repository (lab/openapi.json) instead of downloading it: the lines then exist on GitHub.
+        run: |
+          APIFUZZ_USER_A=alice APIFUZZ_PASSWORD_A=alice           APIFUZZ_USER_B=bob APIFUZZ_PASSWORD_B=bob           apifuzz scan lab/openapi.json --base-url http://localhost:8000             --i-have-authorization --require-docker             --sarif report.sarif --fail-on never
       - name: Check the planted BOLA was found
         run: |
           python - <<'PY'
@@ -74,5 +82,14 @@ jobs:
             report.json
             report.sarif
             report.html
+      - name: Upload the lab's findings to code scanning
+        # The lab's flaws are planted on purpose, so these alerts are expected: they show what the
+        # scanner's SARIF looks like on GitHub. Pushes only: a pull request from a fork has no
+        # permission to upload.
+        if: github.event_name == 'push'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: report.sarif
+          category: vulnshop-lab
       - if: always()
         run: docker compose down

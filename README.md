@@ -195,7 +195,7 @@ jobs:
         run: >
           apifuzz scan openapi.json --i-have-authorization
           --sarif apifuzz.sarif --accepted apifuzz-accepted.json --fail-on high
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()   # upload the findings even when the scan step failed the job
         with:
           sarif_file: apifuzz.sarif
@@ -204,6 +204,10 @@ jobs:
 The scan step exits `1` when there is an open finding at or above `--fail-on`, which fails the
 job; the upload step still runs. Code scanning is free on public repositories and needs GitHub
 Advanced Security on private ones. Without it, drop the upload step and keep the exit code.
+
+This repository does the same with its own lab: the CI demo job uploads the VulnShop scan, so the
+planted flaws appear under the repository's **Security → Code scanning** tab, each one on the
+line of [lab/openapi.json](lab/openapi.json) that declares the endpoint.
 
 ## Reports
 
