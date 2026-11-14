@@ -301,6 +301,16 @@ minimal requests and does not exploit them: probes use marker values, changes ar
 login attempts use an account that doesn't exist. It is not a tool for scanning third-party
 services.
 
+## Releasing
+
+Publishing to PyPI is automated by [.github/workflows/release.yml](.github/workflows/release.yml)
+using PyPI Trusted Publishing (OIDC), so no API token is stored. One-time setup: register this
+repo as a pending publisher at <https://pypi.org/manage/account/publishing/> (project `apifuzz`,
+workflow `release.yml`, environment `pypi`), and create a GitHub environment named `pypi`. To cut
+a release: bump `version` in `pyproject.toml` (PyPI refuses a re-upload of an existing version),
+then publish a GitHub Release with a tag like `v0.2.0`. The workflow builds, runs `twine check`,
+and uploads. The published version is the one in `pyproject.toml`, not the git tag.
+
 ## What's next
 
 - SARIF 2.1.0 output for GitHub code scanning, and a file of accepted findings.
