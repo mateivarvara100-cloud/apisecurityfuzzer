@@ -26,6 +26,11 @@ $ make demo
         111 requests sent to http://localhost:8000
 ```
 
+The same scan as a standalone HTML report (`--html report.html`), grouped by severity with each
+finding expandable to its request and response evidence:
+
+![apifuzz HTML report for the VulnShop lab: 7 findings, 2 critical, 4 high, 1 medium, and the "What was tested" coverage table](docs/report.png)
+
 ## What it checks
 
 | Check | OWASP | How it works, in one line |
