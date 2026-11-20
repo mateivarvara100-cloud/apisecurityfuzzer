@@ -148,6 +148,8 @@ class TestLabGroundTruth:
             ("rate-limit", "GET /search", "MEDIUM"),
             ("injection", "GET /search", "HIGH"),
             ("injection", "POST /login", "HIGH"),
+            ("injection", "GET /catalog/{name}", "HIGH"),  # a path parameter
+            ("injection", "GET /stock", "HIGH"),  # a header
         }
         assert {f["owasp"].split()[0] for f in report["findings"]} == {
             "API1:2023", "API2:2023", "API3:2023", "API4:2023", "API8:2019",

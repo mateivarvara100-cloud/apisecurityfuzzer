@@ -72,6 +72,8 @@ jobs:
           assert ("auth-required", "GET /users/{id}") in found, found
           assert ("injection", "GET /search") in found, found
           assert ("injection", "POST /login") in found, found
+          assert ("injection", "GET /catalog/{name}") in found, found  # a path parameter
+          assert ("injection", "GET /stock") in found, found  # a header
           print("demo scan OK:", report["requests_sent"], "requests,", len(report["findings"]), "findings")
           PY
       - uses: actions/upload-artifact@v4

@@ -237,6 +237,7 @@ class TestCli:
             ("bola", "GET /orders/{id}"), ("auth-required", "GET /users/{id}"), ("mass-assignment", "PATCH /users/{id}"),
             ("rate-limit", "POST /login"), ("rate-limit", "GET /search"),
             ("injection", "GET /search"), ("injection", "POST /login"),
+            ("injection", "GET /catalog/{name}"), ("injection", "GET /stock"),
         }
         assert all(r["locations"][0]["physicalLocation"]["region"]["startLine"] > 1 for r in run["results"])
         assert "lab-token" not in text
@@ -259,7 +260,7 @@ class TestCli:
         second = _lab_scan(lab_api, "--accepted", str(accepted), "--json")
         assert second.exit_code == 0, second.output
         report = json.loads(second.stdout)
-        assert len(report["findings"]) == 7 and all(f["accepted"] for f in report["findings"])
+        assert len(report["findings"]) == 9 and all(f["accepted"] for f in report["findings"])
 
     # One accepted finding leaves the others failing the run, and a stale entry is pointed out.
     def test_partly_accepted_and_stale(self, lab_api, lab_accounts, tmp_path):

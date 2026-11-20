@@ -22,7 +22,7 @@ from apifuzz.http_client import Allowlist, HttpClient
 from apifuzz.report import coverage_notes, coverage_table, findings_table, to_html, to_json
 from apifuzz.sarif import to_sarif
 from apifuzz.scanner import run_scan
-from apifuzz.session_manager import authenticate, preflight
+from apifuzz.session_manager import Reauthenticator, authenticate, preflight
 from apifuzz.settings import host_entry, require_docker_setting, resolve_settings
 from apifuzz.spec_loader import load_spec
 
@@ -268,6 +268,15 @@ def scan(
             help="Requests the rate-limit check sends to one endpoint. Default: APIFUZZ_BURST, else 15.",
         ),
     ] = None,
+    concurrency: Annotated[
+        int | None,
+        typer.Option(
+            "--concurrency", min=1, max=10,
+            help="How many of the rate-limit burst's requests are in flight at once. 1 sends them one "
+            "after another (gentlest); more catches limiters that only count parallel requests. "
+            "Default: APIFUZZ_CONCURRENCY, else 1.",
+        ),
+    ] = None,
     timeout: Annotated[float, typer.Option("--timeout", min=0.1, help="Seconds to wait for each response.")] = 10.0,
     max_requests: Annotated[
         int, typer.Option("--max-requests", min=1, help="Stop the scan after sending this many requests.")
@@ -323,7 +332,8 @@ def scan(
 
     Test accounts are read only from the environment or .env, never from flags, so they don't end
     up in shell history: APIFUZZ_TOKEN_A / _B, or APIFUZZ_USER_A / APIFUZZ_PASSWORD_A (and B) to
-    log in through APIFUZZ_LOGIN_PATH (default /login).
+    log in through APIFUZZ_LOGIN_PATH (default /login). With HTTP basic auth the username and
+    password are sent as they are. APIFUZZ_AUTH_QUERY=<name> sends the token as ?<name>=<token>.
     """
     if not i_have_authorization:
         _err.print(
@@ -368,7 +378,7 @@ def scan(
     try:
         settings = resolve_settings(
             spec=document, base_url=base_url, allowlist=allow, require_docker=docker_only,
-            shared_paths=shared, burst=burst, spec_source=spec,
+            shared_paths=shared, burst=burst, concurrency=concurrency, spec_source=spec,
         )
         if settings.require_docker:
             # Confirm the base URL and every extra entry belong to running containers, then allow
@@ -396,6 +406,9 @@ def scan(
             # The full endpoint list is used: a filter such as --path must not hide /me from this.
             for line in preflight(client, settings, build_endpoints(document)):
                 _warn(f"warning: {line}")
+            # From here on, a token that expires mid-scan is renewed by logging in again.
+            reauth = Reauthenticator(client, settings, build_endpoints(document))
+            client.reauthenticate = reauth
             if any(c.id == "bola" for c in chosen) and not (settings.token_a and settings.token_b):
                 _warn(
                     "note: the bola check was skipped because it needs two accounts. Set APIFUZZ_TOKEN_A "
@@ -429,8 +442,11 @@ def scan(
             f"(fixed, or the endpoint changed). Remove them: {', '.join(stale)}"
         )
 
-    # The tokens are replaced wherever they turn up in a report, not only in known headers.
-    secrets = [settings.token_a, settings.token_b]
+    for line in reauth.notes:
+        _warn(f"note: {line}")
+    # The tokens are replaced wherever they turn up in a report, not only in known headers. That
+    # includes tokens replaced by a fresh login mid-scan: earlier evidence still carries them.
+    secrets = [settings.token_a, settings.token_b, *reauth.retired]
     if write_accepted_path is not None:
         try:
             write_accepted(write_accepted_path, result.findings)

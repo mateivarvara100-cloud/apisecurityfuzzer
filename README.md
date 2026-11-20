@@ -9,27 +9,35 @@ the severity, and the fix.
 > `mass-assignment`, `rate-limit` and `injection` (SQL/NoSQL, detection only). Reports come
 > as tables, JSON, HTML and SARIF (for GitHub code scanning). Every check is verified against the bundled VulnShop lab on each test run.
 
+The planted BOLA flaw in the bundled lab, found by swapping two test accounts' tokens:
+
+![apifuzz scan --only bola against the VulnShop lab: one CRITICAL finding on GET /orders/{id}, the "What was tested" table, and exit code 1](docs/scan-bola.svg)
+
+All five checks against the same lab:
+
 ```text
 $ make demo
 ...
-   12 endpoints scanned · 7 findings (2 critical, 4 high, 1 medium) · 5 checks run
+   14 endpoints scanned · 9 findings (2 critical, 6 high, 1 medium) · 5 checks run
                      What was tested
 +--------------------------------------------------------+
 | Check           | Tested | Not tested | Not applicable |
 |-----------------+--------+------------+----------------|
-| auth-required   |      7 |          0 |              5 |
-| bola            |      4 |          0 |              8 |
-| injection       |      2 |          0 |             10 |
-| mass-assignment |      2 |          0 |             10 |
-| rate-limit      |      2 |          0 |             10 |
+| auth-required   |      9 |          0 |              5 |
+| bola            |      4 |          1 |              9 |
+| injection       |      8 |          0 |              6 |
+| mass-assignment |      2 |          0 |             12 |
+| rate-limit      |      2 |          0 |             12 |
 +--------------------------------------------------------+
-        111 requests sent to http://localhost:8000
+        145 requests sent to http://localhost:8000
+not tested: bola: GET /catalog/{name}: neither account could read any of the 4 ids tried, so
+there was nothing to compare
 ```
 
 The same scan as a standalone HTML report (`--html report.html`), grouped by severity with each
 finding expandable to its request and response evidence:
 
-![apifuzz HTML report for the VulnShop lab: 7 findings, 2 critical, 4 high, 1 medium, and the "What was tested" coverage table](docs/report.png)
+![apifuzz HTML report for the VulnShop lab: 9 findings, 2 critical, 6 high, 1 medium, and the "What was tested" coverage table](docs/report.png)
 
 ## What it checks
 
@@ -38,8 +46,8 @@ finding expandable to its request and response evidence:
 | `bola` | API1:2023 | Logs in as two users and checks whether one can read the other's objects (`GET /orders/{id}`). |
 | `auth-required` | API2:2023 | Calls endpoints the spec says need a login with no credentials, and reports the ones that answer. |
 | `mass-assignment` | API3:2023 | Sends an update or create with one extra field the spec doesn't list (such as `role`) and reads the object back to see if it was saved. |
-| `rate-limit` | API4:2023 | Sends a small burst of identical requests to login and search endpoints and looks for a `429` or rate-limit headers. |
-| `injection` | API8:2019 | Sends inert marker values to query-string parameters and to JSON body fields of login/search endpoints, and watches the response *shape* for a database error, an always-true/always-false differential, or an accepted NoSQL operator object. Detection only. |
+| `rate-limit` | API4:2023 | Sends a small burst of identical requests to login and search endpoints (one at a time, or several at once with `--concurrency`) and looks for a `429` or rate-limit headers. |
+| `injection` | API8:2019 | Sends inert marker values to query-string parameters, path parameters and headers of GET endpoints, and to JSON body fields of login/search endpoints, and watches the response *shape* for a database error, an always-true/always-false differential, or an accepted NoSQL operator object. Detection only. |
 
 All probes are meant to detect a flaw, not to use it. Details for each check are under
 [How each check works](#how-each-check-works).
@@ -86,11 +94,20 @@ each one either a token (`APIFUZZ_TOKEN_A` / `_B`) or a username and password (`
 - With a username and password, apifuzz POSTs them to `APIFUZZ_LOGIN_PATH` (default `/login`) and
   reads the token from the answer. `APIFUZZ_LOGIN_FORMAT=form` sends form fields instead of JSON;
   `APIFUZZ_LOGIN_USER_FIELD` / `APIFUZZ_LOGIN_PASSWORD_FIELD` rename the fields.
-- The token is sent the way the spec's security scheme says (a bearer token, an API-key header,
-  or a cookie). `APIFUZZ_AUTH_HEADER` / `APIFUZZ_AUTH_PREFIX` override that.
+- The token is sent the way the spec's security scheme says: a bearer token, an API-key header,
+  a cookie, an API key in the query string (`?api_key=…`), or HTTP basic auth.
+  `APIFUZZ_AUTH_HEADER` / `APIFUZZ_AUTH_PREFIX` override that, and `APIFUZZ_AUTH_QUERY=<name>`
+  sends the token as a query parameter instead.
+- With HTTP basic auth (the spec's scheme, or `APIFUZZ_AUTH_PREFIX=Basic`) nothing is POSTed: the
+  username and password are sent with each request as `Authorization: Basic …`.
 - Before scanning, each token is tried on a protected endpoint. The scan stops if a token is
   refused, if A and B have the same token, or if both turn out to be the same user. Otherwise it
   would test nothing and report a clean API, or "prove" two accounts can read each other's data.
+- If a token expires during the scan, the account logs in again and the request is retried
+  once. A `401` alone doesn't trigger that: the token is first tried on a "who am I" endpoint,
+  and only a token that fails there too is renewed (at most 3 times per account). This needs a
+  username and password; a token given directly can't be renewed. Replaced tokens are redacted
+  from reports like the current ones.
 
 | Option | What it does |
 | --- | --- |
@@ -100,6 +117,7 @@ each one either a token (`APIFUZZ_TOKEN_A` / `_B`) or a username and password (`
 | `-m`, `-p`, `-t`, `--auth` | Scan only some endpoints: by method, path pattern, tag, or login needed (`login`/`none`) |
 | `--shared` | Path pattern whose objects are shared between users on purpose, e.g. `'/posts/*'`; `bola` skips it (repeatable) |
 | `--burst` | Requests the `rate-limit` check sends to one endpoint (default 15, at most 50) |
+| `--concurrency` | How many of those requests are in flight at once (default 1, at most 10) |
 | `--max-requests` | Stop the scan after this many requests (default 1000) |
 | `--delay` | Seconds to wait between requests |
 | `--timeout` | Seconds to wait for each response (default 10) |
@@ -267,23 +285,34 @@ deleted straight after it is read, and the report names any that could not be. W
 the endpoint is listed as not tested.
 
 **`rate-limit`.** For login-like POST endpoints and search-like GET endpoints: a burst of
-identical requests, one after another, stopping at the first `429` or `Retry-After` /
-`RateLimit-*` header. Answers that get several times slower as the burst goes on also count as
-throttling. If the whole burst is answered with no sign of throttling, a login endpoint
-is HIGH and a search endpoint MEDIUM. Login attempts use made-up credentials for a user that
-doesn't exist. Endpoints that create data or send messages (sign-up, password reset) are never
-burst. This is detection, not a load test: the burst is capped at 50.
+identical requests, stopping at the first `429` or `Retry-After` / `RateLimit-*` header. Answers
+that get several times slower as the burst goes on also count as throttling. If the whole burst
+is answered with no sign of throttling, a login endpoint is HIGH and a search endpoint MEDIUM.
+Login attempts use made-up credentials for a user that doesn't exist. Endpoints that create data
+or send messages (sign-up, password reset) are never burst. By default the requests go one after
+another, the gentlest choice for staging. Some limiters only count requests that arrive at the
+same time; `--concurrency N` keeps N in flight at once to catch those, and the finding says
+which way the burst was sent. This is detection, not a load test: the burst is capped at 50 and
+the concurrency at 10.
 
 **`injection`.** On one input at a time it sends a benign baseline value, then a value with one
 extra quote (`apifuzz'`), then an always-true and an always-false value (`apifuzz' OR '1'='1' -- `
 / `apifuzz' AND '1'='2' -- `). A database error in the answer to the quote, or a result set that
 differs between the always-true and always-false values, means the input is reaching a query
-unescaped — HIGH, once the signal repeats on a second request. Two kinds of input are probed:
-query-string parameters on GET/HEAD endpoints, and JSON body fields on endpoints that read or
-authenticate (login / search / lookup / query shaped) — for body fields it also sends an operator
-object (`{"$ne": …}`) where a scalar is expected, to catch NoSQL operator injection. Create and
-update endpoints are never probed with a body, so the check can neither create nor change data;
-the markers are inert, and it counts records, never reads their contents.
+unescaped — HIGH, once the signal repeats on a second request. What is probed:
+
+- On GET/HEAD endpoints: query-string parameters, path parameters (`/catalog/{name}`), and the
+  header parameters the spec declares (`X-Tenant`). The login header, `Cookie` and the standard
+  HTTP headers are left alone. For a path or header value a `404` counts as a real answer, since
+  a made-up value is usually "not found"; a header value is sent without trailing whitespace,
+  which HTTP doesn't allow.
+- JSON body fields on endpoints that read or authenticate (login / search / lookup / query
+  shaped). For body fields it also sends an operator object (`{"$ne": …}`) where a scalar is
+  expected, to catch NoSQL operator injection.
+
+Create and update endpoints are never probed with a body, and path values of DELETE/PATCH/PUT
+endpoints are never probed, so the check can neither create nor change data. The markers are
+inert, and it counts records, never reads their contents.
 
 ## Lab target (VulnShop)
 
@@ -299,6 +328,8 @@ false positive.
 | `PATCH /users/{id}` | Planted: saves every field in the body, including `role` | `mass-assignment` (CRITICAL) |
 | `POST /login` | Planted: accepts any number of attempts, and pastes `username` into a SQL user lookup | `rate-limit` (HIGH), `injection` (HIGH) |
 | `GET /search` | Planted: accepts any number of searches, and pastes `q` into a SQL query | `rate-limit` (MEDIUM), `injection` (HIGH) |
+| `GET /catalog/{name}` | Planted: pastes the path value into a SQL query | `injection` (HIGH) |
+| `GET /stock` | Planted: pastes the `X-Warehouse` header into a SQL query | `injection` (HIGH) |
 | `GET /me`, `GET /orders` | Correct: only the caller's own data | nothing |
 | `POST /orders`, `DELETE /orders/{id}` | Correct: saves only the fields the spec allows; you can delete only your own orders | nothing |
 | `GET /products/{id}` | Correct: shared on purpose with every logged-in user | nothing |
@@ -354,8 +385,8 @@ The HTTP client is the only code that touches the target. Checks share one inter
 | `src/apifuzz/spec_loader.py` | Reads a spec from a file or URL, resolves its `$ref`s, validates it, and turns problems into clear errors. |
 | `src/apifuzz/endpoint_model.py` | Turns the spec into a plain list of `Endpoint` objects. |
 | `src/apifuzz/settings.py` | Combines flags, environment/`.env` and the spec into scan settings, including how tokens are sent and which target is confirmed. |
-| `src/apifuzz/session_manager.py` | Logs the two test accounts in, and checks their tokens work and belong to two different users. |
-| `src/apifuzz/http_client.py` | The only code that sends requests to a target. Enforces the allowlist and the request limit, never follows redirects, and records each request and response as evidence. |
+| `src/apifuzz/session_manager.py` | Logs the two test accounts in, checks their tokens work and belong to two different users, and logs an account in again if its token expires mid-scan. |
+| `src/apifuzz/http_client.py` | The only code that sends requests to a target. Enforces the allowlist and the request limit, never follows redirects, adds the account's credentials, and records each request and response as evidence. |
 | `src/apifuzz/checks/` | One module per check. `base.py` defines `Check`, `ScanContext` and the registry. |
 | `src/apifuzz/scanner.py` | Runs the chosen checks over the chosen endpoints, and collects findings and coverage. |
 | `src/apifuzz/finding.py` | The `Finding` record, its fingerprint, and the severity scale. |
@@ -404,6 +435,3 @@ and uploads. The published version is the one in `pyproject.toml`, not the git t
 ## What's next
 
 - A small hosted demo (Phase 4): the same engine behind a login, limited to approved targets.
-- Wider injection coverage: path parameters and headers (today's check covers query-string
-  parameters and the JSON body fields of login/search endpoints, including a NoSQL operator-object
-  probe).

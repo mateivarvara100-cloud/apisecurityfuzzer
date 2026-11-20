@@ -12,7 +12,7 @@ from urllib.parse import quote  # make a path value safe to put in a URL
 
 from apifuzz.endpoint_model import Endpoint
 from apifuzz.finding import Finding
-from apifuzz.http_client import HttpClient
+from apifuzz.http_client import Credentials, HttpClient
 from apifuzz.settings import Settings
 
 
@@ -41,10 +41,14 @@ class ScanContext:
         """Note what a check did with an endpoint: TESTED, or NOT_TESTED with the reason why."""
         self.outcomes[(check_id, f"{endpoint.method} {endpoint.path}")] = (status, reason)
 
-    def auth(self, account: str) -> dict[str, str] | None:
-        """The login header for test account "a" or "b", or None if that account has no token."""
+    def auth(self, account: str) -> Credentials | None:
+        """How test account "a" or "b" logs a request in, or None if that account has no token.
+
+        Usually a header dict such as {"Authorization": "Bearer ..."}; it can also carry a
+        query-string key. Tagged with the account, so an expired token can be refreshed mid-scan.
+        """
         token = self.settings.token_a if account == "a" else self.settings.token_b
-        return self.settings.auth_headers(token) if token else None
+        return self.settings.credentials(token, account) if token else None
 
     def url(self, path: str) -> str:
         """Join the base URL and an endpoint path: ("https://x", "/orders") -> "https://x/orders"."""

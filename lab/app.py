@@ -16,6 +16,8 @@ Ground truth (what apifuzz should and should not report):
   POST /login         injection      username is pasted into a SQL user lookup (password still checked)
   GET /search         rate-limit     any number of searches is accepted
   GET /search?q=      injection      q is pasted into a SQL query string (also rate-limit, above)
+  GET /catalog/{name} injection      the path value is pasted into a SQL query string
+  GET /stock          injection      the X-Warehouse header is pasted into a SQL query string
   GET /me             nothing        correctly protected (false-positive guard)
   GET /orders         nothing        lists only the caller's own orders
   POST /orders        nothing        saves only the fields the spec allows (DELETE cleans up)
@@ -34,7 +36,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 SPEC_PATH = Path(os.environ.get("SPEC_PATH", "/app/openapi.json"))
 def hardened() -> bool:
@@ -55,6 +57,8 @@ ORDERS = {
     2: {"id": 2, "owner": 2, "item": "lamp", "quantity": 2},
 }
 PRODUCTS = ["book", "lamp", "mug", "pen"]
+# Stock per warehouse, for GET /stock (the warehouse is chosen with the X-Warehouse header).
+STOCK = [("north", "book", 3), ("north", "lamp", 1), ("south", "mug", 7), ("south", "pen", 12)]
 # The catalog is the same for everyone. Reading a product is not a flaw, and bola must not say so.
 CATALOG = {i: {"id": i, "name": name, "price": 5 * i} for i, name in enumerate(PRODUCTS, start=1)}
 # Invoices are private and correctly protected, in both lab modes.
@@ -189,6 +193,36 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             db.close()
 
+    def _catalog_by_name(self, name: str) -> list[dict]:
+        """Products with exactly this name, using a real (in-memory) SQLite query."""
+        db = sqlite3.connect(":memory:")
+        try:
+            db.execute("CREATE TABLE products (id INTEGER, name TEXT, price INTEGER)")
+            db.executemany("INSERT INTO products VALUES (?, ?, ?)", [(p["id"], p["name"], p["price"]) for p in CATALOG.values()])
+            if hardened():
+                rows = db.execute("SELECT id, name, price FROM products WHERE name = ?", (name,)).fetchall()
+            else:
+                # PLANTED (injection): the path value is pasted into the query text.
+                rows = db.execute("SELECT id, name, price FROM products WHERE name = '" + name + "'").fetchall()
+            return [{"id": i, "name": n, "price": p} for i, n, p in rows]
+        finally:
+            db.close()
+
+    def _stock_in(self, warehouse: str) -> list[dict]:
+        """Stock lines for one warehouse, using a real (in-memory) SQLite query."""
+        db = sqlite3.connect(":memory:")
+        try:
+            db.execute("CREATE TABLE stock (warehouse TEXT, item TEXT, quantity INTEGER)")
+            db.executemany("INSERT INTO stock VALUES (?, ?, ?)", STOCK)
+            if hardened():
+                rows = db.execute("SELECT item, quantity FROM stock WHERE warehouse = ?", (warehouse,)).fetchall()
+            else:
+                # PLANTED (injection): the X-Warehouse header is pasted into the query text.
+                rows = db.execute("SELECT item, quantity FROM stock WHERE warehouse = '" + warehouse + "'").fetchall()
+            return [{"item": item, "quantity": quantity} for item, quantity in rows]
+        finally:
+            db.close()
+
     # --- routes ----------------------------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802
@@ -223,6 +257,27 @@ class Handler(BaseHTTPRequestHandler):
             if pid in CATALOG:
                 return self._send(200, CATALOG[pid])
             return self._send(404, {"error": "no such product"})
+
+        if path.startswith("/catalog/"):
+            if self._caller() is None:
+                return self._send(401, {"error": "login required"})
+            name = unquote(path[len("/catalog/"):])
+            try:
+                found = self._catalog_by_name(name)
+            except sqlite3.Error as exc:
+                return self._send(500, {"error": f"SQL error: {exc}"})  # PLANTED (injection): leaks the error
+            return self._send(200, found) if found else self._send(404, {"error": "no such product"})
+
+        if path == "/stock":
+            if self._caller() is None:
+                return self._send(401, {"error": "login required"})
+            warehouse = self.headers.get("X-Warehouse")
+            if not warehouse:
+                return self._send(400, {"error": "the X-Warehouse header is required"})
+            try:
+                return self._send(200, self._stock_in(warehouse))
+            except sqlite3.Error as exc:
+                return self._send(500, {"error": f"SQL error: {exc}"})  # PLANTED (injection): leaks the error
 
         if path.startswith("/invoices/"):
             uid = self._caller()

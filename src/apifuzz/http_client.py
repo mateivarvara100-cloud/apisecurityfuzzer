@@ -4,8 +4,9 @@ Every request is checked against an allowlist before it leaves the process, and 
 and response are recorded so a finding can later show its evidence.
 """
 
+import threading  # the rate-limit check may send a burst from several threads at once
 import time  # used to measure how long each request took
-from collections.abc import Iterable  # type hint for "anything you can loop over"
+from collections.abc import Callable, Iterable  # type hints: a function value, "anything you can loop over"
 from types import TracebackType  # type hint used by __exit__ (the `with` statement support)
 from typing import Any
 from urllib.parse import urlparse  # splits a URL into scheme, host, port, path...
@@ -72,6 +73,42 @@ class Allowlist:
             raise AllowlistError(f"refusing to contact {url}: its host is not on the allowlist")
 
 
+class Credentials(dict[str, str]):
+    """How one test account logs a request in: the headers to send, plus any query-string values.
+
+    It is a dict of headers, so it can be passed straight to `HttpClient.request(headers=...)`.
+    An API that takes its key in the query string (`?api_key=...`) gets an empty header dict and
+    the key in `params`; the client adds those to the URL. `account` ("a" / "b") and `token` let
+    the client ask for a fresh login when the token stops working in the middle of a scan.
+    """
+
+    def __init__(
+        self,
+        headers: dict[str, str] | None = None,
+        *,
+        params: dict[str, str] | None = None,
+        account: str | None = None,
+        token: str | None = None,
+    ) -> None:
+        super().__init__(headers or {})
+        self.params = dict(params or {})
+        self.account = account
+        self.token = token
+
+    def __bool__(self) -> bool:
+        # A query-string key has no headers, but it is still a login.
+        return bool(len(self) or self.params)
+
+    def merged(self, extra: dict[str, str]) -> "Credentials":
+        """These credentials with extra headers added (e.g. a header the endpoint requires)."""
+        return Credentials({**self, **extra}, params=self.params, account=self.account, token=self.token)
+
+
+# Called with the credentials of a request that was answered 401. Returns fresh credentials to
+# retry once with, or None to keep the 401 as the answer.
+Reauthenticate = Callable[[Credentials], "Credentials | None"]
+
+
 # The three record classes below are the "evidence" a finding will show in a report.
 
 
@@ -126,6 +163,10 @@ class HttpClient:
         self._delay = delay
         self.requests_sent = 0  # requests that left the process (whether or not they were answered)
         self.responses_received = 0  # requests that got an HTTP answer back
+        # Set by the CLI once the test accounts are logged in: a way to log in again when a token
+        # expires mid-scan (see session_manager.Reauthenticator). None means a 401 is final.
+        self.reauthenticate: Reauthenticate | None = None
+        self._lock = threading.Lock()  # guards the counters and the delay when threads share the client
         # One reusable httpx client: it keeps connections open between requests (faster).
         # The User-Agent names the tool, so the target's logs show where the traffic came from.
         self._client = httpx.Client(
@@ -144,18 +185,48 @@ class HttpClient:
         params: dict[str, Any] | None = None,  # query string values, e.g. {"q": "book"}
         json: Any = None,  # a body to send as JSON
         data: dict[str, str] | None = None,  # a body to send as form fields (some logins need this)
+        refresh: bool = True,  # on a 401, may the client log the account in again and retry once?
     ) -> Exchange:
+        exchange = self._send(method, url, headers=headers, params=params, json=json, data=data)
+        if (
+            refresh
+            and exchange.response.status_code == 401
+            and self.reauthenticate is not None
+            and isinstance(headers, Credentials)
+            and headers.account
+        ):
+            fresh = self.reauthenticate(headers)
+            if fresh is not None:
+                # One retry with the new token. Its answer is the one the check sees.
+                return self._send(method, url, headers=fresh, params=params, json=json, data=data)
+        return exchange
+
+    def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None,
+        params: dict[str, Any] | None,
+        json: Any,
+        data: dict[str, str] | None,
+    ) -> Exchange:
+        if isinstance(headers, Credentials) and headers.params:
+            params = {**(params or {}), **headers.params}  # an API key that goes in the query string
         # httpx's `params=` REPLACES a query string already in the URL ("/search?q=a" would lose
         # q=a). Merge instead, so a URL from the spec or the user keeps its own query values.
         full_url = httpx.URL(url).copy_merge_params(params) if params else url
         # Build the request without sending it, so we can inspect the final URL first.
-        request = self._client.build_request(method, full_url, headers=headers, json=json, data=data)
+        request = self._client.build_request(
+            method, full_url, headers=dict(headers) if headers else None, json=json, data=data
+        )
         self._allowlist.check(str(request.url))  # before anything is sent
-        if self._max_requests is not None and self.requests_sent >= self._max_requests:
-            raise RequestLimitError(f"request limit reached ({self._max_requests}); raise it with --max-requests")
-        if self._delay and self.requests_sent:
-            time.sleep(self._delay)
-        self.requests_sent += 1
+        with self._lock:  # several threads may share this client during a concurrent burst
+            if self._max_requests is not None and self.requests_sent >= self._max_requests:
+                raise RequestLimitError(f"request limit reached ({self._max_requests}); raise it with --max-requests")
+            if self._delay and self.requests_sent:
+                time.sleep(self._delay)
+            self.requests_sent += 1
 
         started = time.perf_counter()  # a high-precision clock, good for measuring durations
         try:
@@ -171,7 +242,8 @@ class HttpClient:
             # `exc or type(exc).__name__`: some httpx errors have an empty message; fall back to the class name.
             raise RequestError(f"{method.upper()} {request.url}: {exc or type(exc).__name__}") from exc
         elapsed_ms = (time.perf_counter() - started) * 1000  # seconds -> milliseconds
-        self.responses_received += 1
+        with self._lock:
+            self.responses_received += 1
 
         # Package everything into plain records that a report can show later.
         return Exchange(

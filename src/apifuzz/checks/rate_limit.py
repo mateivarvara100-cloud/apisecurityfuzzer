@@ -12,7 +12,9 @@ more than 50) one after another and watches for any sign of throttling:
   first third (some APIs delay repeated attempts instead of refusing them).
 
 It stops at the first sign. If the whole burst is answered with none, the endpoint is reported.
-This is detection, not a load test: the requests are sequential and the burst is capped.
+This is detection, not a load test: the burst is capped, and by default the requests are sent one
+after another. `--concurrency N` (at most 10) keeps N in flight at once instead, to catch a limiter
+that only counts parallel requests.
 
 Which endpoints are tried, and how:
   login-like POST   (login, signin, token, auth, session...)  HIGH
@@ -28,11 +30,13 @@ even though they also need rate limits: fifteen sign-ups or reset e-mails are no
 import re
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 
 from apifuzz.checks.base import NOT_TESTED, TESTED, Check, ScanContext, fill_path, sample_body
 from apifuzz.endpoint_model import Endpoint
 from apifuzz.finding import Finding, Severity
 from apifuzz.http_client import Exchange
+from apifuzz.settings import MAX_CONCURRENCY
 
 MAX_BURST = 50  # hard ceiling, whatever the setting says
 # Words (in a path segment or the operation id) that mark the two kinds of endpoint tried.
@@ -115,23 +119,33 @@ class RateLimit(Check):
                       for p in endpoint.parameters if p.location == "query" and p.required}
 
         burst = max(2, min(ctx.settings.burst, MAX_BURST))
+        # Requests in flight at once. 1 (the default) sends them one after another; more catches a
+        # limiter that only counts parallel requests. Never more than the burst, never more than 10.
+        parallel = max(1, min(ctx.settings.concurrency, MAX_CONCURRENCY, burst))
         sent: list[Exchange] = []
         timings: list[float] = []
+
+        def one() -> Exchange:
+            return ctx.client.request(endpoint.method, url, headers=headers, params=params or None, json=body)
+
         started = time.perf_counter()
-        for _ in range(burst):
-            last = ctx.client.request(endpoint.method, url, headers=headers, params=params or None, json=body)
-            sent.append(last)
-            timings.append(last.elapsed_ms)
-            sign = _throttle_sign(last)
-            if sign:
-                ctx.record(self.id, endpoint, TESTED)  # throttled: the endpoint is doing its job
-                return
-            if last.response.status_code not in _HANDLED:
-                ctx.record(
-                    self.id, endpoint, NOT_TESTED,
-                    f"answered HTTP {last.response.status_code} to the probe request, which settles nothing",
-                )
-                return
+        with ThreadPoolExecutor(max_workers=parallel) as pool:
+            # Waves of `parallel` requests; after each wave, stop at the first sign of throttling.
+            for start in range(0, burst, parallel):
+                wave = [pool.submit(one) for _ in range(min(parallel, burst - start))]
+                for future in wave:
+                    last = future.result()  # re-raises a RequestError from that thread
+                    sent.append(last)
+                    timings.append(last.elapsed_ms)
+                    if _throttle_sign(last):
+                        ctx.record(self.id, endpoint, TESTED)  # throttled: the endpoint is doing its job
+                        return
+                    if last.response.status_code not in _HANDLED:
+                        ctx.record(
+                            self.id, endpoint, NOT_TESTED,
+                            f"answered HTTP {last.response.status_code} to the probe request, which settles nothing",
+                        )
+                        return
 
         ctx.record(self.id, endpoint, TESTED)
         if _slowed_down(timings):
@@ -139,6 +153,7 @@ class RateLimit(Check):
         seconds = time.perf_counter() - started
         first, last = sent[0], sent[-1]
         statuses = f"HTTP {first.response.status_code}"
+        pace = "in a row" if parallel == 1 else f"{parallel} at a time"
         if kind == "login":
             severity, title = Severity.HIGH, "Login endpoint has no rate limit"
             risk = "Someone can try passwords against it without being slowed down (brute force, credential stuffing)."
@@ -161,7 +176,7 @@ class RateLimit(Check):
             title=title,
             endpoint=f"{endpoint.method} {endpoint.path}",
             detail=(
-                f"{burst} identical requests in a row ({seconds:.1f} s) were all answered ({statuses} first, "
+                f"{burst} identical requests {pace} ({seconds:.1f} s) were all answered ({statuses} first, "
                 f"HTTP {last.response.status_code} last) with no 429 and no rate-limit header. {risk}"
             ),
             remediation=fix,

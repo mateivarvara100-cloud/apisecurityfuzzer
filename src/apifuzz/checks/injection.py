@@ -24,10 +24,13 @@ never a finding. The markers are inert: the check counts how many rows come back
 their contents, and writes nothing.
 
 What is probed, and what is left alone:
-  * Query-string parameters on GET/HEAD endpoints.
+  * Query-string parameters, path parameters and declared header parameters on GET/HEAD
+    endpoints (reads only). The login header, Cookie and the standard HTTP headers are never
+    probed. For a path or header value a 404 counts as a real answer: a made-up id is "not found".
   * JSON body fields, but only on endpoints that read or authenticate (login / search / lookup /
     query shaped). Create/update endpoints are never probed with a body, so this check cannot
-    create or change data; mass-assignment covers those instead.
+    create or change data; mass-assignment covers those instead. Path parameters of
+    DELETE/PATCH/PUT name an object to change, so they are never probed either.
 
 Severity: HIGH. A confirmed injection point is among the most serious API flaws.
 """
@@ -35,11 +38,12 @@ Severity: HIGH. A confirmed injection point is among the most serious API flaws.
 import json
 import re
 from collections.abc import Callable, Iterator
+from typing import Any
 
 from apifuzz.checks.base import NOT_TESTED, TESTED, Check, ScanContext, fill_path, sample_body
 from apifuzz.endpoint_model import Endpoint, Parameter, RequestField
 from apifuzz.finding import Finding, Severity
-from apifuzz.http_client import Exchange
+from apifuzz.http_client import Credentials, Exchange
 
 _MARKER = "apifuzz"  # a harmless base value no real record is expected to equal
 _MAX_FIELDS = 5  # parameters/fields probed per endpoint, to keep the request count small
@@ -70,6 +74,12 @@ _DB_ERROR = re.compile(
 )
 
 _PROBEABLE_TYPES = (None, "string", "integer", "number")  # text or numbers, or a type the spec omitted
+
+# Headers that carry the request itself or its login, not application input: never probed.
+_STANDARD_HEADERS = {
+    "authorization", "cookie", "content-type", "content-length", "accept", "accept-encoding", "host",
+    "user-agent", "connection", "proxy-authorization",
+}
 
 
 class _Unhandled:
@@ -110,10 +120,6 @@ def _is_db_error(exchange: Exchange) -> bool:
     return exchange.response.status_code >= 500 and bool(_DB_ERROR.search(exchange.response.body))
 
 
-def _handled(exchange: Exchange) -> bool:
-    return exchange.response.status_code in _HANDLED
-
-
 def _differs(a: Exchange, b: Exchange) -> bool:
     """True when two answers differ in a way that implies query logic, not just payload text.
 
@@ -139,37 +145,99 @@ class Injection(Check):
             if not headers:
                 # Only record for endpoints this check would otherwise probe, so unrelated
                 # endpoints aren't labelled "needs a test account".
-                if self._query_targets(endpoint) or self._body_targets(endpoint):
+                if self._targets(endpoint, ctx):
                     ctx.record(self.id, endpoint, NOT_TESTED, "needs a test account")
                 return
 
         if endpoint.method in ("GET", "HEAD"):
-            yield from self._run_query(endpoint, ctx, headers)
+            yield from self._run_get(endpoint, ctx, headers)
         elif endpoint.method in ("POST", "PUT", "PATCH"):
             yield from self._run_body(endpoint, ctx, headers)
 
-    # --- query-string parameters ---------------------------------------------------------------
+    # --- query-string parameters, path parameters and headers (GET/HEAD only) -------------------
 
     def _query_targets(self, endpoint: Endpoint) -> list[Parameter]:
         if endpoint.method not in ("GET", "HEAD"):
             return []
         return [p for p in endpoint.parameters if p.location == "query" and p.type in _PROBEABLE_TYPES]
 
-    def _run_query(self, endpoint: Endpoint, ctx: ScanContext, headers: dict[str, str] | None) -> Iterator[Finding]:
-        targets = self._query_targets(endpoint)[:_MAX_FIELDS]
-        if not targets:
-            return
+    def _path_targets(self, endpoint: Endpoint) -> list[Parameter]:
+        if endpoint.method not in ("GET", "HEAD"):
+            return []  # a path value on DELETE/PATCH/PUT names an object to change: never probed
+        return [p for p in endpoint.parameters if p.location == "path" and p.type in _PROBEABLE_TYPES]
+
+    def _header_targets(self, endpoint: Endpoint, ctx: ScanContext) -> list[Parameter]:
+        if endpoint.method not in ("GET", "HEAD"):
+            return []
+        skip = _STANDARD_HEADERS | {ctx.settings.auth_header.lower()}
+        return [
+            p for p in endpoint.parameters
+            if p.location == "header" and p.type in _PROBEABLE_TYPES and p.name.lower() not in skip
+        ]
+
+    def _targets(self, endpoint: Endpoint, ctx: ScanContext | None = None) -> bool:
+        """Whether there is anything at all for this check to probe on the endpoint."""
+        headers = self._header_targets(endpoint, ctx) if ctx is not None else []
+        return bool(self._query_targets(endpoint) or self._path_targets(endpoint) or headers or self._body_targets(endpoint))
+
+    def _run_get(self, endpoint: Endpoint, ctx: ScanContext, auth: Credentials | None) -> Iterator[Finding]:
+        # Values every request carries, so each probe changes exactly one input: required query
+        # parameters and required (non-login) headers get a sample, path parameters a sample too.
+        base_query = {p.name: _sample(p.type) for p in endpoint.parameters if p.location == "query" and p.required}
+        skip = _STANDARD_HEADERS | {ctx.settings.auth_header.lower()}
+        base_headers = {
+            p.name: _sample(p.type) for p in endpoint.parameters
+            if p.location == "header" and p.required and p.name.lower() not in skip
+        }
         url = ctx.url(fill_path(endpoint))
-        base = {p.name: _sample(p.type) for p in endpoint.parameters if p.location == "query" and p.required}
 
+        def headers_with(extra: dict[str, str]) -> dict[str, str] | None:
+            merged = {**base_headers, **extra}
+            if auth is not None:
+                return auth.merged(merged)  # keeps the login (and its refresh) on the request
+            return merged or None
+
+        inputs: list[tuple[str, str, str, Callable[[object], Exchange], set[int]]] = []
+        for param in self._query_targets(endpoint)[:_MAX_FIELDS]:
+            def send_query(value: object, name: str = param.name) -> Exchange:
+                return ctx.client.request(
+                    endpoint.method, url, headers=headers_with({}), params={**base_query, name: value}
+                )
+            inputs.append((param.name, param.name, "query parameter", send_query, _HANDLED))
+        for param in self._path_targets(endpoint)[:_MAX_FIELDS]:
+            def send_path(value: object, name: str = param.name) -> Exchange:
+                path_url = ctx.url(fill_path(endpoint, {name: str(value)}))
+                return ctx.client.request(endpoint.method, path_url, headers=headers_with({}), params=base_query or None)
+            # A made-up id is usually "not found", so 404 counts as handled here: it is the answer
+            # the always-false value should get, and an always-true value should not.
+            inputs.append((param.name, f"path:{param.name}", "path parameter", send_path, _HANDLED | {404}))
+        for param in self._header_targets(endpoint, ctx)[:_MAX_FIELDS]:
+            def send_header(value: object, name: str = param.name) -> Exchange:
+                # A header value may not end in whitespace (HTTP forbids it), so the payloads'
+                # trailing "-- " is sent as "--", which still starts a comment in most engines.
+                return ctx.client.request(
+                    endpoint.method, url, headers=headers_with({name: str(value).rstrip()}), params=base_query or None
+                )
+            # As with a path value, an unknown tenant or warehouse is often "not found".
+            inputs.append((param.name, f"header:{param.name}", "header", send_header, _HANDLED | {404}))
+        yield from self._probe_inputs(endpoint, ctx, inputs, allow_nosql=False)
+
+    def _probe_inputs(
+        self,
+        endpoint: Endpoint,
+        ctx: ScanContext,
+        inputs: list[tuple[str, str, str, Callable[[object], Exchange], set[int]]],
+        *,
+        allow_nosql: bool,
+    ) -> Iterator[Finding]:
+        """Probe each (name, key, kind, send, handled statuses) input and record the outcome."""
+        if not inputs:
+            return
         tested = False
-        for param in targets:
-            def send(value: object, name: str = param.name) -> Exchange:
-                return ctx.client.request(endpoint.method, url, headers=headers, params={**base, name: value})
-
-            outcome = self._probe(endpoint, param.name, "query parameter", send, allow_nosql=False)
+        for name, key, where, send, handled in inputs:
+            outcome = self._probe(endpoint, name, where, send, allow_nosql=allow_nosql, handled=handled, key=key)
             if isinstance(outcome, _Unhandled):
-                ctx.record(self.id, endpoint, NOT_TESTED, f"a benign value for {param.name!r} was not handled, which settles nothing")
+                ctx.record(self.id, endpoint, NOT_TESTED, f"a benign value for the {where} {name!r} was not handled, which settles nothing")
                 continue
             tested = True
             if outcome is not None:
@@ -191,42 +259,48 @@ class Injection(Check):
         return bool(words & _BODY_WORDS)
 
     def _run_body(self, endpoint: Endpoint, ctx: ScanContext, headers: dict[str, str] | None) -> Iterator[Finding]:
-        targets = self._body_targets(endpoint)[:_MAX_FIELDS]
-        if not targets:
-            return
         url = ctx.url(fill_path(endpoint))
         base = sample_body(endpoint, text=_MARKER)
-
-        tested = False
-        for field in targets:
+        inputs: list[tuple[str, str, str, Callable[[object], Exchange], set[int]]] = []
+        for field in self._body_targets(endpoint)[:_MAX_FIELDS]:
             def send(value: object, name: str = field.name) -> Exchange:
                 return ctx.client.request(endpoint.method, url, headers=headers, json={**base, name: value})
-
-            outcome = self._probe(endpoint, field.name, "body field", send, allow_nosql=True)
-            if isinstance(outcome, _Unhandled):
-                ctx.record(self.id, endpoint, NOT_TESTED, f"a benign value for {field.name!r} was not handled, which settles nothing")
-                continue
-            tested = True
-            if outcome is not None:
-                yield outcome
-        if tested:
-            ctx.record(self.id, endpoint, TESTED)
+            inputs.append((field.name, field.name, "body field", send, _HANDLED))
+        yield from self._probe_inputs(endpoint, ctx, inputs, allow_nosql=True)
 
     # --- the shared decision logic -------------------------------------------------------------
 
     def _probe(
-        self, endpoint: Endpoint, name: str, where: str, send: Callable[[object], Exchange], *, allow_nosql: bool
+        self,
+        endpoint: Endpoint,
+        name: str,
+        where: str,
+        send: Callable[[object], Exchange],
+        *,
+        allow_nosql: bool,
+        handled: set[int] = _HANDLED,
+        key: str | None = None,
     ) -> Finding | _Unhandled | None:
-        """Probe one input. Returns a Finding, None (clean), or _UNHANDLED (no usable baseline)."""
+        """Probe one input. Returns a Finding, None (clean), or _UNHANDLED (no usable baseline).
+
+        `handled` is the set of statuses that count as a real answer for this kind of input.
+        `key` tells findings on the same endpoint apart (the input's name by default).
+        """
+        def ok(exchange: Exchange) -> bool:
+            return exchange.response.status_code in handled
+
+        def finding(**kwargs: Any) -> Finding:
+            return self._finding(endpoint, name, where, key=key or name, **kwargs)
+
         baseline = send(_MARKER)
-        if not _handled(baseline):
+        if not ok(baseline):
             return _UNHANDLED
 
         # 1) Error-based: an unbalanced quote that produces a database error, confirmed on a repeat.
         quote = send(_QUOTE)
         if _is_db_error(quote) and _is_db_error(send(_QUOTE)):
-            return self._finding(
-                endpoint, name, where, how="a database error",
+            return finding(
+                how="a database error",
                 detail=(
                     f"Sending the {where} {name!r} as {_QUOTE!r} (a value with one extra quote) was answered "
                     f"HTTP {quote.response.status_code} with a database error in the body, confirmed on a second "
@@ -238,11 +312,11 @@ class Injection(Check):
 
         # 2) Boolean differential: always-true vs. always-false, each confirmed on a repeat.
         true1, false1 = send(_TRUE), send(_FALSE)
-        if _handled(true1) and _handled(false1) and _differs(true1, false1):
+        if ok(true1) and ok(false1) and _differs(true1, false1):
             true2, false2 = send(_TRUE), send(_FALSE)
             if _result_size(true2) == _result_size(true1) and _result_size(false2) == _result_size(false1) and _differs(true2, false2):
-                return self._finding(
-                    endpoint, name, where, how="a boolean differential",
+                return finding(
+                    how="a boolean differential",
                     detail=(
                         f"An always-true value for the {where} {name!r} ({_TRUE!r}) and an always-false value "
                         f"({_FALSE!r}) were answered differently, and the difference repeated on a second pair of "
@@ -255,11 +329,11 @@ class Injection(Check):
         # 3) NoSQL operator object where a scalar is expected (body fields only).
         if allow_nosql:
             op1 = send(_OPERATOR)
-            if _handled(op1) and _differs(op1, baseline):
+            if ok(op1) and _differs(op1, baseline):
                 op2 = send(_OPERATOR)
                 if _result_size(op2) == _result_size(op1) and _differs(op2, baseline):
-                    return self._finding(
-                        endpoint, name, where, how="a NoSQL operator object",
+                    return finding(
+                        how="a NoSQL operator object",
                         detail=(
                             f"Sending the {where} {name!r} as the operator object {_OPERATOR!r}, where a plain value "
                             "is expected, changed the response compared with a plain value, and the change repeated. "
@@ -271,7 +345,7 @@ class Injection(Check):
         return None
 
     def _finding(
-        self, endpoint: Endpoint, name: str, where: str, *, how: str, detail: str, evidence: list[Exchange]
+        self, endpoint: Endpoint, name: str, where: str, *, key: str, how: str, detail: str, evidence: list[Exchange]
     ) -> Finding:
         return Finding(
             check=self.id,
@@ -279,7 +353,7 @@ class Injection(Check):
             severity=Severity.HIGH,
             title=f"{where.capitalize()} {name!r} reaches a database query unsafely (injection)",
             endpoint=f"{endpoint.method} {endpoint.path}",
-            key=name,
+            key=key,
             detail=detail + f" This was detected by {how}; no data was read or changed.",
             remediation=(
                 "Never build a query by pasting request values into its text. Use parameterized queries (bound "

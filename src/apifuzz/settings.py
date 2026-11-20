@@ -12,7 +12,9 @@ from urllib.parse import urljoin, urlsplit  # pull the host[:port] out of a base
 from pydantic import BaseModel  # a typed settings record
 
 from apifuzz.errors import ApifuzzError
-from apifuzz.http_client import DEFAULT_PORTS, Allowlist
+from apifuzz.http_client import DEFAULT_PORTS, Allowlist, Credentials
+
+MAX_CONCURRENCY = 10  # most burst requests in flight at once; this is detection, not a load test
 
 
 class ConfigError(ApifuzzError):
@@ -40,14 +42,28 @@ class Settings(BaseModel):
     # when the spec doesn't say. A cookie scheme uses header "Cookie" and prefix "<name>=".
     auth_header: str = "Authorization"
     auth_prefix: str = "Bearer "
+    # Set when the API takes its key in the query string (`?api_key=<token>`) instead of a header.
+    auth_query_param: str | None = None
     # Path patterns (shell style, e.g. "/posts/*") whose objects are shared between users on
     # purpose. The bola check leaves them alone.
     shared_paths: list[str] = []
     burst: int = 15  # how many identical requests the rate-limit check sends to one endpoint
+    concurrency: int = 1  # how many of those burst requests are in flight at once (1 = one after another)
 
-    def auth_headers(self, token: str) -> dict[str, str]:
-        """The header that logs a request in with `token`, e.g. {"Authorization": "Bearer abc"}."""
-        return {self.auth_header: f"{self.auth_prefix}{token}"}
+    @property
+    def is_basic(self) -> bool:
+        """HTTP basic auth: the "token" is base64("user:password"), built locally, with no login call."""
+        return self.auth_query_param is None and self.auth_prefix.strip().lower() == "basic"
+
+    def credentials(self, token: str, account: str | None = None) -> Credentials:
+        """How a request logs in with `token`: e.g. {"Authorization": "Bearer abc"}, or ?api_key=abc."""
+        if self.auth_query_param:
+            return Credentials(params={self.auth_query_param: token}, account=account, token=token)
+        return Credentials({self.auth_header: f"{self.auth_prefix}{token}"}, account=account, token=token)
+
+    def auth_headers(self, token: str) -> Credentials:
+        """Kept for callers that only have a token: the same as credentials(token)."""
+        return self.credentials(token)
 
 
 def load_dotenv(path: str | Path = ".env") -> dict[str, str]:
@@ -95,6 +111,7 @@ def resolve_settings(
     require_docker: bool | None = None,
     shared_paths: list[str] | None = None,
     burst: int | None = None,
+    concurrency: int | None = None,
     spec_source: str | None = None,
     env: dict[str, str] | None = None,
 ) -> Settings:
@@ -126,14 +143,15 @@ def resolve_settings(
     if host not in entries:
         entries.insert(0, host)
 
-    auth_header, auth_prefix = _auth_scheme(spec, env)
+    auth_header, auth_prefix, auth_query_param = _auth_scheme(spec, env)
     if burst is None:
-        try:
-            burst = int(env.get("APIFUZZ_BURST") or 15)
-        except ValueError:
-            raise ConfigError(f"APIFUZZ_BURST must be a whole number, got: {env.get('APIFUZZ_BURST')!r}") from None
+        burst = _whole_number(env, "APIFUZZ_BURST", 15)
     if not 2 <= burst <= 50:
         raise ConfigError(f"the burst size must be between 2 and 50, got: {burst}")
+    if concurrency is None:
+        concurrency = _whole_number(env, "APIFUZZ_CONCURRENCY", 1)
+    if not 1 <= concurrency <= MAX_CONCURRENCY:
+        raise ConfigError(f"the concurrency must be between 1 and {MAX_CONCURRENCY}, got: {concurrency}")
     login_format = (env.get("APIFUZZ_LOGIN_FORMAT") or "json").strip().lower()
     if login_format not in ("json", "form"):
         raise ConfigError(f"APIFUZZ_LOGIN_FORMAT must be json or form, got: {login_format!r}")
@@ -153,11 +171,20 @@ def resolve_settings(
         login_password_field=env.get("APIFUZZ_LOGIN_PASSWORD_FIELD") or "password",
         auth_header=auth_header,
         auth_prefix=auth_prefix,
+        auth_query_param=auth_query_param,
         shared_paths=list(shared_paths) if shared_paths else _split_list(env.get("APIFUZZ_SHARED")),
         burst=burst,
+        concurrency=concurrency,
         # None means "not given on the command line": fall back to the env ("1", "true", "yes").
         require_docker=require_docker_setting(require_docker, env),
     )
+
+
+def _whole_number(env: dict[str, str], name: str, default: int) -> int:
+    try:
+        return int(env.get(name) or default)
+    except ValueError:
+        raise ConfigError(f"{name} must be a whole number, got: {env.get(name)!r}") from None
 
 
 def require_docker_setting(flag: bool | None, env: dict[str, str] | None = None) -> bool:
@@ -211,22 +238,26 @@ def _confirmed_spec_server(server: str | None, spec_source: str | None, entries:
     )
 
 
-def _auth_scheme(spec: dict | None, env: dict[str, str]) -> tuple[str, str]:
-    """How to send a token: (header name, text put before the token).
+def _auth_scheme(spec: dict | None, env: dict[str, str]) -> tuple[str, str, str | None]:
+    """How to send a token: (header name, text put before the token, query parameter or None).
 
-    APIFUZZ_AUTH_HEADER / APIFUZZ_AUTH_PREFIX win. Otherwise the spec's security scheme decides,
-    and "Authorization: Bearer <token>" is the fallback.
+    APIFUZZ_AUTH_QUERY (a query parameter name), then APIFUZZ_AUTH_HEADER / APIFUZZ_AUTH_PREFIX
+    win. Otherwise the spec's security scheme decides, and "Authorization: Bearer <token>" is the
+    fallback. A prefix of "Basic" means HTTP basic auth.
     """
+    query = (env.get("APIFUZZ_AUTH_QUERY") or "").strip()
+    if query:
+        return "Authorization", "", query
     header, prefix = env.get("APIFUZZ_AUTH_HEADER"), env.get("APIFUZZ_AUTH_PREFIX")
     if header or prefix:
         prefix = (prefix or "").strip()
         if prefix.isalpha():  # a word such as "Bearer" or "Token" is followed by a space
             prefix += " "
-        return (header or "Authorization").strip(), prefix
-    return _auth_scheme_from_spec(spec) or ("Authorization", "Bearer ")
+        return (header or "Authorization").strip(), prefix, None
+    return _auth_scheme_from_spec(spec) or ("Authorization", "Bearer ", None)
 
 
-def _auth_scheme_from_spec(spec: dict | None) -> tuple[str, str] | None:
+def _auth_scheme_from_spec(spec: dict | None) -> tuple[str, str, str | None] | None:
     if not spec:
         return None
     # OpenAPI 3 keeps schemes under components.securitySchemes; Swagger 2 under securityDefinitions.
@@ -241,9 +272,14 @@ def _auth_scheme_from_spec(spec: dict | None) -> tuple[str, str] | None:
     kind, name = scheme.get("type"), scheme.get("name")
     if kind == "apiKey" and isinstance(name, str) and name:
         if scheme.get("in") == "header":
-            return name, ""
+            return name, "", None
         if scheme.get("in") == "cookie":
-            return "Cookie", f"{name}="
+            return "Cookie", f"{name}=", None
+        if scheme.get("in") == "query":
+            return "Authorization", "", name
+    # OpenAPI 3 says "type: http, scheme: basic"; Swagger 2 says "type: basic".
+    if (kind == "http" and str(scheme.get("scheme", "")).lower() == "basic") or kind == "basic":
+        return "Authorization", "Basic ", None
     return None  # bearer, OAuth2 and anything unknown: the Authorization: Bearer fallback
 
 

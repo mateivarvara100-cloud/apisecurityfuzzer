@@ -373,6 +373,9 @@ def lab_accounts(clean_env):
     return clean_env
 
 
+CATALOG_NOTE = "GET /catalog/{name}: neither account could read any of the 4 ids tried, so there was nothing to compare"
+
+
 class TestLab:
     # Every operation in the lab's spec is really served by the lab app (the spec is hand-written).
     def test_spec_and_app_agree(self, lab_api):
@@ -391,7 +394,8 @@ class TestLab:
         exact = set(re.findall(r'path == "(/[^"]*)"', source))
         prefixes = {p.rstrip("/") + "/{id}" for p in re.findall(r'path\.startswith\("(/[^"]*/)"\)', source)}
         served = (exact | prefixes) - {"/health", "/openapi.json"}  # the two that are not part of the API
-        in_spec = {e.path for e in build_endpoints(load_spec(str(LAB_SPEC)))}
+        # The app's source doesn't say what a placeholder is called, so compare them as "{id}".
+        in_spec = {re.sub(r"\{[^}]+\}", "{id}", e.path) for e in build_endpoints(load_spec(str(LAB_SPEC)))}
 
         assert served and served == in_spec
 
@@ -407,8 +411,10 @@ class TestLab:
         assert (finding["endpoint"], finding["severity"]) == ("GET /orders/{id}", "CRITICAL")
         assert "GET /orders lists this id only for account" in finding["detail"]
         (coverage,) = report["coverage"]
-        # orders, invoices, products, and users (open to everyone: auth-required's finding, not bola's)
-        assert coverage["tested"] == 4 and coverage["notes"] == []
+        # orders, invoices, products, and users (open to everyone: auth-required's finding, not bola's).
+        # The catalog is looked up by name, and no name is known to either account: not tested, said so.
+        assert coverage["tested"] == 4
+        assert coverage["notes"] == [CATALOG_NOTE]
         assert "What was tested" in result.output  # the table is still printed next to --json-out
         # The evidence shows Bob's order to Alice, but not the tokens.
         assert "lab-token" not in out.read_text(encoding="utf-8")
@@ -419,7 +425,7 @@ class TestLab:
 
         report = json.loads(result.stdout)
         assert report["findings"] == []
-        assert report["coverage"][0]["notes"] == ["GET /orders/{id}: marked as shared on purpose (--shared)"]
+        assert report["coverage"][0]["notes"] == ["GET /orders/{id}: marked as shared on purpose (--shared)", CATALOG_NOTE]
 
     # A low request limit stops the scan with exit 2 before it starts, or marks it partial.
     def test_request_limit_from_the_cli(self, lab_api, lab_accounts):
