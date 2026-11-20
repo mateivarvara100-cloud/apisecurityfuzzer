@@ -315,11 +315,13 @@ class Injection(Check):
         if ok(true1) and ok(false1) and _differs(true1, false1):
             true2, false2 = send(_TRUE), send(_FALSE)
             if _result_size(true2) == _result_size(true1) and _result_size(false2) == _result_size(false1) and _differs(true2, false2):
+                # Quote the values as they were sent: a header value goes without its trailing space.
+                shown_true, shown_false = (_TRUE.rstrip(), _FALSE.rstrip()) if where == "header" else (_TRUE, _FALSE)
                 return finding(
                     how="a boolean differential",
                     detail=(
-                        f"An always-true value for the {where} {name!r} ({_TRUE!r}) and an always-false value "
-                        f"({_FALSE!r}) were answered differently, and the difference repeated on a second pair of "
+                        f"An always-true value for the {where} {name!r} ({shown_true!r}) and an always-false value "
+                        f"({shown_false!r}) were answered differently, and the difference repeated on a second pair of "
                         "requests. A value treated as plain text would give the same answer both times; a different "
                         "answer means the value is changing what the query selects."
                     ),

@@ -158,8 +158,11 @@ job green for findings you already know about.
 **SARIF.** `--sarif FILE` writes the findings as SARIF 2.1.0, which GitHub code scanning reads.
 Each finding points at the endpoint's operation in the spec file, so it shows up next to the
 route's definition, with its severity (critical / high / medium / low) and a fingerprint that
-keeps it the same alert from run to run. Evidence is left out of the SARIF file; use `--html` or
-`--json-out` for that.
+keeps it the same alert from run to run. GitHub takes the severity label from the check, not the
+single finding, so every alert of a check shows that check's worst severity in the run (a
+medium search rate limit is labelled high when the same scan found a high login one); the
+report files keep each finding's own severity. Evidence is left out of the SARIF file; use
+`--html` or `--json-out` for that.
 
 **Accepted findings.** `--accepted FILE` names a JSON file of findings you have decided to live
 with. They are still listed in every report, marked as accepted, but no longer count towards

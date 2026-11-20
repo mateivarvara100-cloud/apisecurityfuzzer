@@ -114,6 +114,8 @@ class TestHeaderInjection:
 
         (finding,) = Injection().run(STOCK, _ctx(handler))
         assert "boolean differential" in finding.detail
+        # The finding quotes the values as sent: without the trailing space HTTP forbids in a header.
+        assert "\"apifuzz' OR '1'='1' --\"" in finding.detail and "-- \"" not in finding.detail
 
     # The login header and standard headers are never probed, even when the spec declares them.
     def test_login_and_standard_headers_are_skipped(self):
