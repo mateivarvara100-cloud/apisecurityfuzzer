@@ -1,0 +1,54 @@
+@use "sass:map";
+@use "tokens" as *;
+
+// Rules for screens up to the named breakpoint (sm 640px, md 900px).
+@mixin below($bp) {
+  @media (max-width: map.get($breakpoints, $bp)) {
+    @content;
+  }
+}
+
+// HTTP content: requests, endpoints, bodies. Narrowed so long paths and JSON fit.
+@mixin mono($size: var(--t-xs)) {
+  font-family: var(--font-mono);
+  font-stretch: 87.5%;
+  font-size: $size;
+}
+
+@mixin reset-button {
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+// A control that answers a press: colors ease, and it sinks a pixel while held.
+@mixin pressable {
+  transition:
+    background-color var(--t-fast) ease,
+    border-color var(--t-fast) ease,
+    box-shadow var(--t-fast) ease,
+    transform var(--t-fast) ease;
+
+  &:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+}
+
+// A checkbox sitting beside a two-line label.
+@mixin check-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 12px;
+  cursor: pointer;
+
+  input {
+    margin: 3px 0 0;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+  }
+}

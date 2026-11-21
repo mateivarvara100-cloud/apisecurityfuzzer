@@ -1,0 +1,270 @@
+// The evidence timeline: each request the scanner sent, marked with who sent it. This is the
+// one bold element of the design; everything around it stays quiet.
+@use "tokens" as *;
+@use "mixins" as *;
+
+.timeline {
+  display: grid;
+}
+
+.exchange {
+  --actor: var(--actor-none);
+  --actor-tint: var(--actor-none-tint);
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 0 20px;
+  position: relative;
+  padding-bottom: 20px;
+
+  @each $name, $_ in $actors {
+    &--#{$name} {
+      --actor: var(--actor-#{$name});
+      --actor-tint: var(--actor-#{$name}-tint);
+    }
+  }
+
+  // the line joining one request to the next
+  &::after {
+    content: "";
+    position: absolute;
+    left: 15px;
+    top: 34px;
+    bottom: 0;
+    width: 1px;
+    background: var(--rule-strong);
+  }
+
+  &:last-child::after {
+    display: none;
+  }
+
+  &__who {
+    display: grid;
+    grid-template-columns: 31px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+  }
+
+  &__badge {
+    width: 31px;
+    height: 31px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-weight: 800;
+    font-size: var(--t-sm);
+    color: var(--on-badge);
+    background: var(--actor);
+  }
+
+  // Filled badges for the two accounts; hollow ones for "a token" and "no token".
+  &--none &__badge,
+  &--token &__badge {
+    background: var(--surface);
+    color: var(--actor);
+    box-shadow: inset 0 0 0 1.5px var(--actor);
+  }
+
+  &__label {
+    font-size: var(--t-sm);
+    font-weight: 600;
+    line-height: 1.25;
+    padding-top: 6px;
+    color: var(--actor);
+  }
+
+  &__card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--actor);
+    border-radius: 0 0 var(--radius) var(--radius);
+    box-shadow: var(--shadow-card);
+    min-width: 0;
+  }
+
+  // The request line carries a wash of the sender's color, so A's and B's requests read apart
+  // even before the label.
+  &__line {
+    @include mono;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    background: color-mix(in srgb, var(--actor-tint) 60%, var(--surface));
+  }
+
+  &__req {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+
+    b {
+      font-weight: 600;
+      margin-right: 0.6ch;
+    }
+  }
+
+  &__status {
+    font-weight: 600;
+    white-space: nowrap;
+    padding: 1px 6px;
+    border-radius: 2px;
+    background: var(--surface);
+    box-shadow: inset 0 0 0 1px var(--rule);
+
+    &--2 {
+      color: var(--ink);
+    }
+    &--4 {
+      color: var(--ink-2);
+    }
+    &--5 {
+      color: var(--danger);
+      background: var(--danger-tint);
+      box-shadow: none;
+    }
+  }
+
+  &__pane {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+
+    &--single {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  &__body {
+    padding: 10px 14px;
+    min-width: 0;
+
+    & + & {
+      border-left: 1px solid var(--rule);
+    }
+  }
+
+  &__body-label {
+    font-size: var(--t-xs);
+    color: var(--ink-3);
+    margin-bottom: 4px;
+  }
+
+  &__code {
+    font-size: var(--t-xs);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: 0;
+  }
+
+  &__same {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 14px 10px;
+    padding: 2px 8px;
+    font-size: var(--t-xs);
+    font-weight: 600;
+    color: var(--actor);
+    background: var(--actor-tint);
+    border-radius: 2px;
+  }
+
+  // Headers fold away; the arrow turns and, where the browser can, the panel slides open.
+  &__headers {
+    border-top: 1px solid var(--rule);
+    font-size: var(--t-xs);
+    interpolate-size: allow-keywords;
+
+    summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      cursor: pointer;
+      color: var(--ink-3);
+      list-style: none;
+      transition: color var(--t-fast) ease;
+
+      &::-webkit-details-marker {
+        display: none;
+      }
+
+      &::before {
+        content: "";
+        width: 0;
+        height: 0;
+        border-style: solid;
+        border-width: 4px 0 4px 6px;
+        border-color: transparent transparent transparent currentColor;
+        transition: transform var(--t-med) var(--ease-out);
+      }
+
+      &:hover {
+        color: var(--ink);
+      }
+    }
+
+    &[open] summary::before {
+      transform: rotate(90deg);
+    }
+
+    &::details-content {
+      block-size: 0;
+      overflow: hidden;
+      transition:
+        block-size var(--t-med) var(--ease-out),
+        content-visibility var(--t-med) allow-discrete;
+    }
+
+    &[open]::details-content {
+      block-size: auto;
+    }
+  }
+
+  @include below(sm) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+
+    &::after {
+      display: none;
+    }
+
+    &__pane {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    &__body + &__body {
+      border-left: 0;
+      border-top: 1px solid var(--rule);
+    }
+  }
+}
+
+.headers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 20px;
+  padding: 0 14px 12px;
+
+  @include below(sm) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  &__col h4 {
+    margin-bottom: 4px;
+    font-size: var(--t-xs);
+    font-weight: 600;
+  }
+
+  &__row {
+    @include mono(0.75rem);
+    overflow-wrap: anywhere;
+    color: var(--ink-2);
+
+    span {
+      color: var(--ink-3);
+    }
+  }
+}

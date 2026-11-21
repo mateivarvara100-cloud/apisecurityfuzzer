@@ -1,0 +1,149 @@
+// Page chrome: the preview note, top bar and main column.
+@use "mixins" as *;
+
+.mock-note {
+  background: #2a1416;
+  color: #ffb4b4;
+  border-bottom: 1px solid #4a1f24;
+  font-size: var(--t-xs);
+  padding: 6px var(--gutter);
+  text-align: center;
+}
+
+// Sticky and frosted on wider screens; on a phone it scrolls away to leave room for the report.
+.topbar {
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+
+  @supports (backdrop-filter: blur(1px)) {
+    background: rgb(20 20 24 / 0.8);
+    backdrop-filter: saturate(1.4) blur(12px);
+  }
+
+  @include below(sm) {
+    position: static;
+  }
+
+  &__inner {
+    max-width: var(--page);
+    margin: 0 auto;
+    padding: 0 var(--gutter);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 24px;
+    min-height: 56px;
+  }
+}
+
+// Two small bars, A and B: the token swap as a mark.
+// The mark ({ } with a red cursor) and the name. On hover the braces open out and the cursor
+// holds steady, as if it had caught something; the name fuzzes (FuzzText).
+.mark {
+  fill: none;
+  overflow: visible;
+
+  &__brace {
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform var(--t-med) var(--ease-out);
+  }
+
+  &__cursor {
+    fill: var(--accent-text);
+    animation: blink 1.15s steps(1, end) infinite;
+  }
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 800;
+  font-size: var(--t-lg);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  text-decoration: none;
+
+  &__mark {
+    width: 28px;
+    height: 20px;
+  }
+
+  &:hover,
+  &:focus-visible {
+    .mark__brace--left {
+      transform: translateX(-2px);
+    }
+    .mark__brace--right {
+      transform: translateX(2px);
+    }
+    .mark__cursor {
+      animation: none;
+    }
+  }
+}
+
+.nav {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+
+  &__link {
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: var(--t-sm);
+    font-weight: 500;
+    padding: 6px 10px;
+    border-radius: var(--radius);
+    transition:
+      color var(--t-fast) ease,
+      background-color var(--t-fast) ease,
+      box-shadow var(--t-med) var(--ease-out);
+
+    &:hover {
+      color: var(--ink);
+      background: var(--surface);
+    }
+
+    &[aria-current="page"] {
+      color: var(--ink);
+      border-radius: 0;
+      box-shadow: inset 0 -2px 0 var(--accent-text);
+    }
+  }
+
+  @include below(sm) {
+    order: 3;
+    flex-basis: 100%;
+    margin: 0 -10px;
+  }
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+
+  @include below(sm) {
+    margin-left: auto;
+  }
+}
+
+.main {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 40px var(--gutter) 64px;
+
+  @include below(sm) {
+    padding-top: 28px;
+  }
+}
+

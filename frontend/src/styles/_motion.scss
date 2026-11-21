@@ -1,0 +1,140 @@
+// Entrances. Each page has one: the findings strip fills in when a report opens, and a finding's
+// requests appear in the order the scanner sent them. Responses to clicks (hover, selection,
+// opening headers) live with their components. Under prefers-reduced-motion everything here is
+// off (see _base.scss) and the elements are simply there: every animation only starts from a
+// hidden state, the resting state is the normal style.
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+// Grows a bar up from its base without touching transform, which selection already uses.
+@keyframes fill-up {
+  from {
+    clip-path: inset(100% 0 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes draw-down {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+// The mark's cursor, like a terminal's.
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+// B's card when its answer matches A's: a red ring swells and fades, once. The leak, made visible.
+@keyframes leak {
+  0% {
+    box-shadow: var(--shadow-card), 0 0 0 0 rgb(255 107 107 / 0);
+  }
+  35% {
+    box-shadow: var(--shadow-card), 0 0 0 4px rgb(255 107 107 / 0.5);
+  }
+  100% {
+    box-shadow: var(--shadow-card), 0 0 0 14px rgb(255 107 107 / 0);
+  }
+}
+
+// A new line in the request feed slides up from below.
+@keyframes line-in {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+}
+
+$strip-step: 45ms;
+$exchange-step: 110ms;
+
+// ---- report opens: one segment after another, worst first ----
+.strip__seg {
+  animation: fill-up 420ms var(--ease-out) both;
+
+  @for $i from 1 through 24 {
+    &:nth-child(#{$i}) {
+      animation-delay: 120ms + $strip-step * ($i - 1);
+    }
+  }
+}
+
+.strip__legend {
+  animation: fade 400ms ease 500ms both;
+}
+
+// ---- a finding opens: its header settles, then the requests arrive in order ----
+.detail {
+  animation: fade 220ms ease both;
+}
+
+.timeline .exchange {
+  animation: rise 360ms var(--ease-out) both;
+
+  // the line to the next request draws once this one has arrived
+  &::after {
+    transform-origin: top;
+    animation: draw-down 320ms var(--ease-out) both;
+  }
+
+  @for $i from 1 through 6 {
+    &:nth-child(#{$i}) {
+      $start: 80ms + $exchange-step * ($i - 1);
+      animation-delay: $start;
+
+      &::after {
+        animation-delay: $start + 200ms;
+      }
+
+      // The request goes out first; its status code arrives a beat later, then the body.
+      .exchange__status {
+        animation: pop 240ms var(--ease-out) both;
+        animation-delay: $start + 170ms;
+      }
+
+      .exchange__pane {
+        animation: fade 260ms ease both;
+        animation-delay: $start + 210ms;
+      }
+
+      // "Same answer as Account A" lands last: it is the conclusion of the pair
+      .exchange__same {
+        animation: pop 300ms var(--ease-out) both;
+        animation-delay: $start + 300ms;
+      }
+
+      &.exchange--leak .exchange__card {
+        animation: leak 900ms var(--ease-out) both;
+        animation-delay: $start + 320ms;
+      }
+    }
+  }
+}
+
+// ---- a scan runs: requests stream out ----
+.ticker__line:last-child {
+  animation: line-in 160ms var(--ease-out) both;
+}

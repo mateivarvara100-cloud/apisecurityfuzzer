@@ -1,0 +1,160 @@
+@use "tokens" as *;
+@use "mixins" as *;
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--t-md);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+dl,
+dd,
+ol,
+ul {
+  margin: 0;
+}
+
+ol,
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: var(--accent-text);
+  text-underline-offset: 0.18em;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-stretch: 87.5%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+// FuzzText: an unsettled character keeps its real width but shows a red glyph drawn over it.
+.fuzz__char {
+  position: relative;
+  color: transparent;
+
+  &::after {
+    content: attr(data-glyph);
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-text);
+    font-family: var(--font-mono);
+    font-stretch: 87.5%;
+    font-weight: 500;
+    font-size: 0.78em;
+  }
+}
+
+// Shared type
+.page-title {
+  font-size: var(--t-2xl);
+  line-height: 1.1;
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  max-width: 22ch;
+}
+
+.lede {
+  margin-top: 12px;
+  color: var(--ink-2);
+  font-size: var(--t-lg);
+  max-width: 60ch;
+}
+
+.section-title {
+  font-size: var(--t-xl);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+// Severity mark: a small square in the severity's color, then the word.
+.sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  white-space: nowrap;
+
+  &::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 1px;
+    background: currentColor;
+  }
+
+  @each $name, $_ in $severities {
+    &--#{$name} {
+      color: var(--sev-#{$name});
+    }
+  }
+}
+
+.empty {
+  padding: 32px 0;
+  max-width: 60ch;
+
+  &__title {
+    font-size: var(--t-xl);
+    font-weight: 700;
+  }
+
+  &__text {
+    margin-top: 8px;
+    color: var(--ink-2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after,
+  ::details-content {
+    animation: none !important;
+    transition: none !important;
+  }
+}

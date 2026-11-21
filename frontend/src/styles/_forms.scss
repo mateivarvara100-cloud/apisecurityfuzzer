@@ -1,0 +1,454 @@
+// Buttons, fields, notices, and the sign-in and new-scan forms.
+@use "mixins" as *;
+
+.button {
+  @include reset-button;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  font-size: var(--t-md);
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  @include pressable;
+
+  &:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  &--quiet {
+    background: transparent;
+    color: var(--ink);
+    border-color: var(--rule-strong);
+    font-size: var(--t-sm);
+    padding: 6px 12px;
+
+    &:hover {
+      background: var(--surface);
+    }
+  }
+}
+
+// Google's sign-in button, per its branding guidelines (dark theme).
+.google-button {
+  @include reset-button;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+  background: #131314;
+  color: #e3e3e3;
+  border: 1px solid #8e918f;
+  border-radius: var(--radius);
+  font-family: Roboto, var(--font-sans);
+  font-weight: 500;
+  font-size: var(--t-md);
+  @include pressable;
+
+  &:hover {
+    background: #1f1f22;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: progress;
+  }
+
+  &__logo {
+    width: 20px;
+    height: 20px;
+    flex: none;
+  }
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+
+  &__label {
+    font-weight: 600;
+    font-size: var(--t-sm);
+  }
+
+  &__hint {
+    font-size: var(--t-sm);
+    color: var(--ink-3);
+  }
+
+  &__error {
+    font-size: var(--t-sm);
+    color: var(--danger);
+    font-weight: 500;
+  }
+}
+
+.input {
+  font: inherit;
+  font-size: var(--t-md);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  width: 100%;
+  min-width: 0;
+  transition:
+    border-color var(--t-fast) ease,
+    box-shadow var(--t-med) var(--ease-out);
+
+  &:hover:not(:disabled) {
+    border-color: var(--ink-3);
+  }
+
+  // A soft ring in account A's indigo instead of the browser's outline.
+  &:focus-visible {
+    outline: none;
+    border-color: var(--actor-a);
+    box-shadow: var(--ring);
+  }
+
+  &:disabled {
+    background: var(--paper);
+    color: var(--ink-2);
+  }
+
+  &--mono {
+    @include mono(var(--t-sm));
+  }
+
+  &[aria-invalid="true"] {
+    border-color: var(--danger);
+    box-shadow: var(--ring-error);
+  }
+}
+
+.notice {
+  border-left: 3px solid var(--sev-HIGH);
+  background: var(--sev-HIGH-tint);
+  padding: 12px 16px;
+  font-size: var(--t-sm);
+
+  &--error {
+    border-left-color: var(--danger);
+    background: var(--danger-tint);
+  }
+}
+
+// ---- sign in ----
+.signin {
+  display: grid;
+  grid-template-columns: minmax(0, 400px) minmax(0, 1fr);
+  gap: 64px;
+  align-items: start;
+
+  &__google {
+    display: grid;
+    gap: 12px;
+    margin-top: 32px;
+  }
+
+  // A rule with the words in the middle, between the two ways to sign in.
+  &__or {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 28px 0 20px;
+    font-size: var(--t-sm);
+    color: var(--ink-3);
+
+    &::before,
+    &::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--rule);
+    }
+  }
+
+  &__form {
+    display: grid;
+    gap: 20px;
+  }
+
+  &__aside {
+    border-left: 1px solid var(--rule);
+    padding-left: 40px;
+  }
+
+  &__aside-title {
+    font-size: var(--t-lg);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  &__aside-text {
+    color: var(--ink-2);
+    font-size: var(--t-sm);
+    max-width: 56ch;
+    margin-bottom: 20px;
+  }
+
+  @include below(md) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 48px;
+
+    &__aside {
+      border-left: 0;
+      border-top: 1px solid var(--rule);
+      padding: 32px 0 0;
+    }
+  }
+}
+
+// ---- new scan ----
+.scan-form {
+  margin-top: 40px;
+  display: grid;
+  gap: 32px;
+  max-width: 760px;
+
+  &__row {
+    display: grid;
+    grid-template-columns: 160px minmax(0, 1fr);
+    gap: 8px 24px;
+    align-items: start;
+
+    > .field__label {
+      padding-top: 11px;
+    }
+
+    > .scan-form__group-label {
+      padding-top: 13px;
+    }
+
+    @include below(sm) {
+      grid-template-columns: minmax(0, 1fr);
+
+      > .field__label,
+      > .scan-form__group-label {
+        padding-top: 0;
+      }
+    }
+  }
+
+  &__submit {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+  }
+
+  &__limits {
+    font-size: var(--t-sm);
+    color: var(--ink-3);
+  }
+}
+
+.allowlist {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+
+  &__item {
+    @include reset-button;
+    font-size: var(--t-sm);
+    border: 1px dashed var(--rule-strong);
+    color: var(--ink-2);
+    border-radius: var(--radius);
+    padding: 3px 8px;
+    @include pressable;
+
+    &:hover {
+      border-style: solid;
+      border-color: var(--ink-3);
+      background: var(--surface);
+    }
+
+    code {
+      color: var(--ink);
+      font-size: var(--t-xs);
+    }
+  }
+}
+
+.checklist {
+  display: grid;
+  border-top: 1px solid var(--rule);
+  margin: 0 -8px; // rows bleed 8px either side for their hover wash; the rules bleed with them
+
+  &__item {
+    @include check-row;
+    padding: 12px 8px;
+    border-bottom: 1px solid var(--rule);
+    border-radius: var(--radius);
+    transition: background-color var(--t-fast) ease;
+
+    &:hover {
+      background: var(--surface);
+    }
+
+    // A check that won't run fades back, so the ones that will stand out.
+    > span {
+      transition: opacity var(--t-med) var(--ease-out);
+    }
+
+    &:has(input:not(:checked)) > span {
+      opacity: 0.55;
+    }
+  }
+
+  &__name {
+    font-weight: 600;
+  }
+
+  &__owasp {
+    font-size: var(--t-xs);
+    color: var(--ink-3);
+    margin-left: 8px;
+  }
+
+  &__summary {
+    display: block;
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+  }
+}
+
+.consent {
+  @include check-row;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  transition:
+    border-color var(--t-med) var(--ease-out),
+    background-color var(--t-med) var(--ease-out),
+    box-shadow var(--t-med) var(--ease-out);
+
+  &:hover {
+    border-color: var(--ink-3);
+  }
+
+  // Once confirmed, the box takes the ink color: the form is ready to send.
+  &:has(input:checked) {
+    border-color: var(--ink);
+    background: var(--actor-a-tint);
+    box-shadow: inset 3px 0 0 var(--accent-text);
+  }
+
+  &__text {
+    font-weight: 600;
+  }
+
+  &__sub {
+    display: block;
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+    font-weight: 400;
+  }
+}
+
+// While a scan runs: the mark's cursor blinks beside the status, and a terminal-style feed of
+// requests scrolls underneath (RequestTicker).
+.running {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  max-width: 560px;
+
+  &__status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 600;
+  }
+
+  &__mark {
+    width: 28px;
+    height: 20px;
+    color: var(--ink);
+  }
+}
+
+.ticker {
+  background: #0d0d10;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 10px 14px 12px;
+
+  &__label {
+    font-size: var(--t-xs);
+    color: var(--ink-3);
+    margin-bottom: 6px;
+  }
+
+  &__lines {
+    @include mono;
+    display: grid;
+    gap: 2px;
+    min-height: calc(5 * 1.6em + 8px);
+    align-content: end;
+  }
+
+  &__line {
+    display: flex;
+    gap: 1ch;
+    line-height: 1.6;
+    color: var(--ink-2);
+    white-space: nowrap;
+    overflow: hidden;
+
+    b {
+      font-weight: 600;
+      color: var(--ink);
+      min-width: 5ch;
+    }
+
+    // older lines fade upward, like a terminal scrolling
+    &:nth-last-child(n + 2) {
+      opacity: 0.75;
+    }
+    &:nth-last-child(n + 3) {
+      opacity: 0.5;
+    }
+    &:nth-last-child(n + 4) {
+      opacity: 0.3;
+    }
+  }
+
+  &__path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__status {
+    font-weight: 600;
+
+    &--2 {
+      color: var(--ink);
+    }
+    &--4 {
+      color: var(--ink-3);
+    }
+    &--5 {
+      color: var(--accent-text);
+    }
+  }
+}

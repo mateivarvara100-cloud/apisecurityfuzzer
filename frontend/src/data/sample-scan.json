@@ -1,0 +1,785 @@
+{
+  "schema_version": 2,
+  "tool_version": "0.5.1",
+  "target": "http://127.0.0.1:8000",
+  "started_at": "2026-11-21T15:02:21+00:00",
+  "duration_s": 0.11,
+  "requests_sent": 145,
+  "findings": [
+    {
+      "check": "bola",
+      "owasp": "API1:2023 Broken Object Level Authorization",
+      "severity": "CRITICAL",
+      "title": "One user can read another user's object",
+      "endpoint": "GET /orders/{id}",
+      "detail": "Object id=1 gave the same answer to test account A and test account B (confirmed on a second request), while a request without a token was refused. GET /orders lists this id only for account A, yet account B could read it.",
+      "remediation": "Before returning an object, check that it belongs to the caller (or that the caller is allowed to see it), and answer 403 or 404 otherwise. Looking objects up through the caller (e.g. WHERE id = ? AND owner_id = current_user) makes the check hard to forget.",
+      "evidence": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/orders/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "52"
+            },
+            "body": "{\"id\": 1, \"owner\": 1, \"item\": \"book\", \"quantity\": 1}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.4042000000481494
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/orders/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "52"
+            },
+            "body": "{\"id\": 1, \"owner\": 1, \"item\": \"book\", \"quantity\": 1}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.3789000002143439
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/orders/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 401,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "27"
+            },
+            "body": "{\"error\": \"login required\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.3691000001708744
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/orders/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "52"
+            },
+            "body": "{\"id\": 1, \"owner\": 1, \"item\": \"book\", \"quantity\": 1}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.4122000000279513
+        }
+      ],
+      "key": "",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "9e963586edc93e06"
+    },
+    {
+      "check": "mass-assignment",
+      "owasp": "API3:2023 Broken Object Property Level Authorization",
+      "severity": "CRITICAL",
+      "title": "Field 'role' can be set by the caller (mass assignment)",
+      "endpoint": "PATCH /users/{id}",
+      "detail": "The spec does not list 'role' as a writable field, but sending it in the update saved it: it was \"user\", and the object read back showed \"apifuzz-probe\" (confirmed on a second read). This field controls what the user may do, so a caller can raise their own privileges. The original value was put back afterwards.",
+      "remediation": "Copy only the fields the endpoint is meant to accept from the request onto the object (an explicit allowlist or a dedicated input model), and ignore or reject everything else. Never bind the whole request body to the stored record.",
+      "evidence": [
+        {
+          "request": {
+            "method": "PATCH",
+            "url": "http://127.0.0.1:8000/users/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]",
+              "content-length": "24",
+              "content-type": "application/json"
+            },
+            "body": "{\"role\": \"apifuzz-probe\"}"
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "78"
+            },
+            "body": "{\"id\": 1, \"name\": \"Alice\", \"email\": \"[redacted]\", \"role\": \"apifuzz-probe\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.5836000000272179
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/users/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "78"
+            },
+            "body": "{\"id\": 1, \"name\": \"Alice\", \"email\": \"[redacted]\", \"role\": \"apifuzz-probe\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.5466000002343208
+        },
+        {
+          "request": {
+            "method": "PATCH",
+            "url": "http://127.0.0.1:8000/users/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]",
+              "content-length": "15",
+              "content-type": "application/json"
+            },
+            "body": "{\"role\": \"user\"}"
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "69"
+            },
+            "body": "{\"id\": 1, \"name\": \"Alice\", \"email\": \"[redacted]\", \"role\": \"user\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 1.0094999997818377
+        }
+      ],
+      "key": "role",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "5070f1f0ac2cefcb"
+    },
+    {
+      "check": "auth-required",
+      "owasp": "API2:2023 Broken Authentication",
+      "severity": "HIGH",
+      "title": "Endpoint answers without authentication",
+      "endpoint": "GET /users/{id}",
+      "detail": "The spec says this endpoint requires a login, but a request with no credentials got HTTP 200 (confirmed on a second request). Anyone may be able to call it.",
+      "remediation": "Require a valid login on this route (for example with your framework's auth middleware or dependency) and answer 401 when the credentials are missing.",
+      "evidence": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/users/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "69"
+            },
+            "body": "{\"id\": 1, \"name\": \"Alice\", \"email\": \"[redacted]\", \"role\": \"user\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.39920000017446
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/users/1",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "69"
+            },
+            "body": "{\"id\": 1, \"name\": \"Alice\", \"email\": \"[redacted]\", \"role\": \"user\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.3865999997287872
+        }
+      ],
+      "key": "",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "dd7258673c80cfac"
+    },
+    {
+      "check": "injection",
+      "owasp": "API8:2019 Injection",
+      "severity": "HIGH",
+      "title": "Body field 'username' reaches a database query unsafely (injection)",
+      "endpoint": "POST /login",
+      "detail": "Sending the body field 'username' as \"apifuzz'\" (a value with one extra quote) was answered HTTP 500 with a database error in the body, confirmed on a second request. The quote reached the query engine unescaped, so the value is placed into the query text rather than bound as a parameter. This was detected by a database error; no data was read or changed.",
+      "remediation": "Never build a query by pasting request values into its text. Use parameterized queries (bound placeholders) or your data layer's query builder, so input is always sent as data, not as part of the query. For NoSQL, reject operator-shaped objects where a scalar is expected, and validate the type and range of every value. Do not return raw database errors to the caller.",
+      "evidence": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/login",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "content-length": "43",
+              "content-type": "application/json"
+            },
+            "body": "{\"username\": \"apifuzz\", \"password\": \"[redacted]\"}"
+          },
+          "response": {
+            "status_code": 401,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "28"
+            },
+            "body": "{\"error\": \"bad credentials\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.9487999996053986
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/login",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "content-length": "44",
+              "content-type": "application/json"
+            },
+            "body": "{\"username\": \"apifuzz'\", \"password\": \"[redacted]\"}"
+          },
+          "response": {
+            "status_code": 500,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "59"
+            },
+            "body": "{\"error\": \"SQL error: unrecognized token: \\\"'apifuzz'')\\\"\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.7926999996925588
+        }
+      ],
+      "key": "username",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "afb8c68f75649b1a"
+    },
+    {
+      "check": "injection",
+      "owasp": "API8:2019 Injection",
+      "severity": "HIGH",
+      "title": "Path parameter 'name' reaches a database query unsafely (injection)",
+      "endpoint": "GET /catalog/{name}",
+      "detail": "Sending the path parameter 'name' as \"apifuzz'\" (a value with one extra quote) was answered HTTP 500 with a database error in the body, confirmed on a second request. The quote reached the query engine unescaped, so the value is placed into the query text rather than bound as a parameter. This was detected by a database error; no data was read or changed.",
+      "remediation": "Never build a query by pasting request values into its text. Use parameterized queries (bound placeholders) or your data layer's query builder, so input is always sent as data, not as part of the query. For NoSQL, reject operator-shaped objects where a scalar is expected, and validate the type and range of every value. Do not return raw database errors to the caller.",
+      "evidence": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/catalog/apifuzz",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 404,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "28"
+            },
+            "body": "{\"error\": \"no such product\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 1.0281999993821955
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/catalog/apifuzz%27",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 500,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "58"
+            },
+            "body": "{\"error\": \"SQL error: unrecognized token: \\\"'apifuzz''\\\"\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 1.5488999997614883
+        }
+      ],
+      "key": "path:name",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "7abffe00e2cb4171"
+    },
+    {
+      "check": "injection",
+      "owasp": "API8:2019 Injection",
+      "severity": "HIGH",
+      "title": "Header 'X-Warehouse' reaches a database query unsafely (injection)",
+      "endpoint": "GET /stock",
+      "detail": "Sending the header 'X-Warehouse' as \"apifuzz'\" (a value with one extra quote) was answered HTTP 500 with a database error in the body, confirmed on a second request. The quote reached the query engine unescaped, so the value is placed into the query text rather than bound as a parameter. This was detected by a database error; no data was read or changed.",
+      "remediation": "Never build a query by pasting request values into its text. Use parameterized queries (bound placeholders) or your data layer's query builder, so input is always sent as data, not as part of the query. For NoSQL, reject operator-shaped objects where a scalar is expected, and validate the type and range of every value. Do not return raw database errors to the caller.",
+      "evidence": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/stock",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]",
+              "x-warehouse": "apifuzz"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "2"
+            },
+            "body": "[]",
+            "truncated": false
+          },
+          "elapsed_ms": 0.5903000001126202
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/stock",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "authorization": "[redacted]",
+              "x-warehouse": "apifuzz'"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 500,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "58"
+            },
+            "body": "{\"error\": \"SQL error: unrecognized token: \\\"'apifuzz''\\\"\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.5370999997467152
+        }
+      ],
+      "key": "header:X-Warehouse",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "db8f5ef4e1c76351"
+    },
+    {
+      "check": "injection",
+      "owasp": "API8:2019 Injection",
+      "severity": "HIGH",
+      "title": "Query parameter 'q' reaches a database query unsafely (injection)",
+      "endpoint": "GET /search",
+      "detail": "Sending the query parameter 'q' as \"apifuzz'\" (a value with one extra quote) was answered HTTP 500 with a database error in the body, confirmed on a second request. The quote reached the query engine unescaped, so the value is placed into the query text rather than bound as a parameter. This was detected by a database error; no data was read or changed.",
+      "remediation": "Never build a query by pasting request values into its text. Use parameterized queries (bound placeholders) or your data layer's query builder, so input is always sent as data, not as part of the query. For NoSQL, reject operator-shaped objects where a scalar is expected, and validate the type and range of every value. Do not return raw database errors to the caller.",
+      "evidence": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/search?q=apifuzz",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "2"
+            },
+            "body": "[]",
+            "truncated": false
+          },
+          "elapsed_ms": 0.8827999999994063
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/search?q=apifuzz%27",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 500,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "49"
+            },
+            "body": "{\"error\": \"SQL error: unrecognized token: \\\"'\\\"\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.6916999991517514
+        }
+      ],
+      "key": "q",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "7791713e8527c9c9"
+    },
+    {
+      "check": "rate-limit",
+      "owasp": "API4:2023 Unrestricted Resource Consumption",
+      "severity": "HIGH",
+      "title": "Login endpoint has no rate limit",
+      "endpoint": "POST /login",
+      "detail": "15 identical requests in a row (0.0 s) were all answered (HTTP 401 first, HTTP 401 last) with no 429 and no rate-limit header. Someone can try passwords against it without being slowed down (brute force, credential stuffing).",
+      "remediation": "Limit attempts per account and per client address (for example 5 a minute), answer 429 with a Retry-After header once the limit is hit, and consider a growing delay or a temporary lock after repeated failures.",
+      "evidence": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/login",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "content-length": "77",
+              "content-type": "application/json"
+            },
+            "body": "{\"username\": \"apifuzz-rate-limit-probe\", \"password\": \"[redacted]\"}"
+          },
+          "response": {
+            "status_code": 401,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "28"
+            },
+            "body": "{\"error\": \"bad credentials\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 1.7864000001281966
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/login",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1",
+              "content-length": "77",
+              "content-type": "application/json"
+            },
+            "body": "{\"username\": \"apifuzz-rate-limit-probe\", \"password\": \"[redacted]\"}"
+          },
+          "response": {
+            "status_code": 401,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "28"
+            },
+            "body": "{\"error\": \"bad credentials\"}",
+            "truncated": false
+          },
+          "elapsed_ms": 0.7536000002801302
+        }
+      ],
+      "key": "",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "f36a1f896121428f"
+    },
+    {
+      "check": "rate-limit",
+      "owasp": "API4:2023 Unrestricted Resource Consumption",
+      "severity": "MEDIUM",
+      "title": "Search endpoint has no rate limit",
+      "endpoint": "GET /search",
+      "detail": "15 identical requests in a row (0.0 s) were all answered (HTTP 200 first, HTTP 200 last) with no 429 and no rate-limit header. Someone can call it in a loop to scrape data or run up cost.",
+      "remediation": "Limit requests per client (per token or address), answer 429 with a Retry-After header once the limit is hit, and cap how much one request can return.",
+      "evidence": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/search?q=test",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "2"
+            },
+            "body": "[]",
+            "truncated": false
+          },
+          "elapsed_ms": 1.0305999994670856
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/search?q=test",
+            "headers": {
+              "host": "127.0.0.1:8000",
+              "accept": "*/*",
+              "accept-encoding": "gzip, deflate",
+              "connection": "keep-alive",
+              "user-agent": "apifuzz/0.5.1"
+            },
+            "body": null
+          },
+          "response": {
+            "status_code": 200,
+            "headers": {
+              "server": "VulnShopLab/1 Python/3.13.7",
+              "date": "Sat, 21 Nov 2026 15:02:21 GMT",
+              "content-type": "application/json",
+              "x-vulnshop-lab": "deliberately-vulnerable; local testing only",
+              "content-length": "2"
+            },
+            "body": "[]",
+            "truncated": false
+          },
+          "elapsed_ms": 2.768800000012561
+        }
+      ],
+      "key": "",
+      "accepted": false,
+      "accepted_reason": "",
+      "fingerprint": "f973d14c0ff69014"
+    }
+  ],
+  "errors": [],
+  "checks_run": [
+    "auth-required",
+    "bola",
+    "injection",
+    "mass-assignment",
+    "rate-limit"
+  ],
+  "endpoints_scanned": 14,
+  "coverage": [
+    {
+      "check": "auth-required",
+      "tested": 9,
+      "not_tested": 0,
+      "not_applicable": 5,
+      "notes": []
+    },
+    {
+      "check": "bola",
+      "tested": 4,
+      "not_tested": 1,
+      "not_applicable": 9,
+      "notes": [
+        "GET /catalog/{name}: neither account could read any of the 4 ids tried, so there was nothing to compare"
+      ]
+    },
+    {
+      "check": "injection",
+      "tested": 8,
+      "not_tested": 0,
+      "not_applicable": 6,
+      "notes": []
+    },
+    {
+      "check": "mass-assignment",
+      "tested": 2,
+      "not_tested": 0,
+      "not_applicable": 12,
+      "notes": []
+    },
+    {
+      "check": "rate-limit",
+      "tested": 2,
+      "not_tested": 0,
+      "not_applicable": 12,
+      "notes": []
+    }
+  ],
+  "incomplete": false
+}

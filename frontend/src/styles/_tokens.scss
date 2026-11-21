@@ -1,0 +1,95 @@
+@use "sass:list";
+@use "sass:map";
+
+// Design tokens. Black, white and red, the same family as the HTML report's dark theme
+// (src/apifuzz/report.py) and the terminal capture in the README, so the CLI's output and the web
+// app read as one product. Colors are CSS custom properties; Sass maps generate the per-severity
+// and per-actor variants from one list. Every text pair here passes WCAG AA (4.5:1).
+
+// Who sent a request. The token swap is the heart of the BOLA check: account A, the owner, is
+// white; account B, the one who got an object that isn't theirs, is red. No token stays grey.
+$actors: (
+  a: (#ececf1, #2a2a32),
+  b: (#ff6b6b, #3a1d20),
+  token: (#b4b4bf, #26262d),
+  none: (#8b8b96, #23232a),
+);
+
+// Severity: (mark color, tint), as in the HTML report. LOW and INFO share the quiet grey.
+$severities: (
+  CRITICAL: (#ff6b6b, #3a1a1d),
+  HIGH: (#ff8fa3, #3a1f27),
+  MEDIUM: (#f6c35b, #3a3020),
+  LOW: (#a0a0ab, #26262d),
+  INFO: (#a0a0ab, #26262d),
+);
+
+$breakpoints: (
+  sm: 640px,
+  md: 900px,
+);
+
+:root {
+  color-scheme: dark;
+
+  --paper: #141418; // the page
+  --surface: #1d1d23; // cards, fields, tables
+  --surface-2: #25252d; // hover on a surface
+  --ink: #ececf1; // text
+  --ink-2: #b4b4bf;
+  --ink-3: #8b8b96;
+  --rule: #2e2e36;
+  --rule-strong: #44444e;
+
+  // The one accent: red. Filled for actions, lighter for text and links.
+  --accent: #d42a36;
+  --accent-hover: #b51f2b;
+  --accent-text: #ff6b6b;
+  --on-accent: #ffffff;
+  --on-badge: #141418; // letters on the filled A and B badges
+
+  @each $name, $pair in $actors {
+    --actor-#{$name}: #{list.nth($pair, 1)};
+    --actor-#{$name}-tint: #{list.nth($pair, 2)};
+  }
+
+  @each $name, $pair in $severities {
+    --sev-#{$name}: #{list.nth($pair, 1)};
+    --sev-#{$name}-tint: #{list.nth($pair, 2)};
+  }
+
+  --ok: #d9d9e0; // "how to fix it" and accepted findings: plain white rather than a fourth color
+  --danger: var(--sev-CRITICAL);
+  --danger-tint: var(--sev-CRITICAL-tint);
+
+  --font-sans: "Schibsted Grotesk", system-ui, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "Cascadia Mono", monospace;
+
+  // type scale: 13 / 14 / 16 / 18 / 24 / 40
+  --t-xs: 0.8125rem;
+  --t-sm: 0.875rem;
+  --t-md: 1rem;
+  --t-lg: 1.125rem;
+  --t-xl: 1.5rem;
+  --t-2xl: 2.5rem;
+
+  --gutter: 16px;
+  --page: 1200px;
+  --radius: 4px;
+  --topbar: 57px;
+
+  // Motion: short, decelerating. Everything is switched off under prefers-reduced-motion.
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --t-fast: 140ms;
+  --t-med: 280ms;
+
+  // The only shadow in the design, for the evidence cards.
+  --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 12px 28px -16px rgb(0 0 0 / 0.8);
+  --ring: 0 0 0 3px rgb(255 255 255 / 0.16);
+  --ring-error: 0 0 0 3px rgb(255 107 107 / 0.22);
+
+  @media (max-width: map.get($breakpoints, sm)) {
+    --t-xl: 1.25rem;
+    --t-2xl: 1.875rem;
+  }
+}
