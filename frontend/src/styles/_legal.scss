@@ -1,0 +1,122 @@
+// The terms and privacy pages, the links to them, and the one-time storage notice.
+@use "mixins" as *;
+
+.legal {
+  max-width: 68ch;
+
+  &__updated {
+    margin-top: 8px;
+    color: var(--ink-3);
+    font-size: var(--t-sm);
+  }
+
+  > .notice {
+    margin-top: 20px;
+  }
+
+  h2 {
+    margin-top: 36px;
+    font-size: var(--t-lg);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  p,
+  ul,
+  .table-wrap {
+    margin-top: 12px;
+    color: var(--ink-2);
+    line-height: 1.6;
+  }
+
+  .lede {
+    color: var(--ink);
+  }
+
+  ul {
+    padding-left: 1.2em;
+    list-style: disc;
+  }
+
+  li + li {
+    margin-top: 6px;
+  }
+
+  &__table td {
+    vertical-align: top;
+    font-size: var(--t-sm);
+  }
+
+  &__missing {
+    color: var(--accent-text);
+  }
+}
+
+// One quiet line under the page, the only place the legal pages are linked besides sign-in.
+.legal-links {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0 var(--gutter) 32px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  font-size: var(--t-xs);
+
+  a {
+    color: var(--ink-3);
+    text-decoration: none;
+    padding: 6px 0;
+
+    @include hover {
+      color: var(--ink);
+      text-decoration: underline;
+    }
+  }
+
+  @include touch {
+    a {
+      padding: 12px 0;
+    }
+  }
+}
+
+// Bottom-left card on wide screens, a full-width bar on phones. Closed for good with OK.
+.storage-notice {
+  position: fixed;
+  left: var(--gutter);
+  bottom: var(--gutter);
+  z-index: 20;
+  max-width: 420px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 12px 12px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  animation: rise var(--t-med) var(--ease-out) both;
+
+  &__text {
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+  }
+
+  &__close {
+    flex: none;
+  }
+
+  @include below(sm) {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-width: none;
+    border-radius: 0;
+    border-width: 1px 0 0;
+  }
+}
+
+.signin__agree {
+  display: block;
+  margin-top: 10px;
+}

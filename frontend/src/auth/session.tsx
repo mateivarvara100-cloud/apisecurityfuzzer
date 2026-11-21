@@ -23,6 +23,8 @@ interface SessionApi {
   notice: string | null; // why the last sign-in redirect was refused, if it was
   signInWithGoogle(): Promise<void>;
   signInWithPassword(email: string, password: string): Promise<void>;
+  /** Finish a Google sign-in with Google's ID token (from our backend's code exchange). */
+  signInWithGoogleToken(idToken: string): Promise<void>;
   signOut(): Promise<void>;
 }
 
@@ -60,7 +62,7 @@ function saveMock(s: Session | null): void {
 /** Supabase's own wording for a refused sign-in, rewritten to say what to do. */
 function explain(message: string): string {
   if (/signups? not allowed/i.test(message)) {
-    return "This account can't sign in. Sign-in is limited to the project owner for now.";
+    return "New accounts can't be created right now. If you already have one, sign in with it.";
   }
   if (/invalid login credentials/i.test(message)) return "That e-mail address and password don't match.";
   return message;
@@ -99,6 +101,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (error) throw new Error(explain(error.message));
   }, []);
 
+  const signInWithGoogleToken = useCallback(async (idToken: string) => {
+    setNotice(null);
+    if (!supabase) throw new Error(NOT_SET_UP);
+    const { error } = await supabase.auth.signInWithIdToken({ provider: "google", token: idToken });
+    if (error) throw new Error(explain(error.message));
+  }, []);
+
   const signInWithPassword = useCallback(async (email: string, password: string) => {
     setNotice(null);
     if (!email.includes("@") || password.length === 0) throw new Error("Enter your e-mail address and password.");
@@ -126,8 +135,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ session, ready, notice, signInWithGoogle, signInWithPassword, signOut }),
-    [session, ready, notice, signInWithGoogle, signInWithPassword, signOut],
+    () => ({ session, ready, notice, signInWithGoogle, signInWithGoogleToken, signInWithPassword, signOut }),
+    [session, ready, notice, signInWithGoogle, signInWithGoogleToken, signInWithPassword, signOut],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

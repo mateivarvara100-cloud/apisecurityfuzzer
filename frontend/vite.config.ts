@@ -16,4 +16,7 @@ export default defineConfig({
   plugins: [react()],
   server: { port: 5173, host: "127.0.0.1" },
   preview: { port: 4173, host: "127.0.0.1", headers: securityHeaders },
+  // Vite inlines small files as data: URLs. Fonts stay files, so the policy can keep
+  // `font-src 'self'` instead of also allowing data:.
+  build: { assetsInlineLimit: (file) => (/\.woff2?$/.test(file) ? false : undefined) },
 });

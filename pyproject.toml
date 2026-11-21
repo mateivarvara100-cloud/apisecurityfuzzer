@@ -45,9 +45,9 @@ apifuzz = "apifuzz.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/apifuzz"]
 
-# The source package is the Python project only; the web app in frontend/ is deployed separately.
+# The source package is the Python project only; the web app (frontend/ and backend/) is deployed separately.
 [tool.hatch.build.targets.sdist]
-exclude = ["/frontend", "/frontend/**"]
+exclude = ["/frontend", "/frontend/**", "/backend", "/backend/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -77,6 +77,8 @@ fail_under = 90  # the suite sits well above this; a drop below it means unteste
 line-length = 120
 target-version = "py311"
 src = ["src", "tests"]
+# The web backend has its own ruff settings (backend/pyproject.toml) and its own environment.
+extend-exclude = ["backend"]
 
 [tool.ruff.lint]
 # E/W: style errors, F: real mistakes (unused names, undefined names), I: import order,

@@ -5,6 +5,7 @@ import { useSession } from "../auth/session";
 import { FuzzText } from "./FuzzText";
 import { Mark } from "./Mark";
 import { RequestField } from "./RequestField";
+import { StorageNotice } from "./StorageNotice";
 
 // Pointing at the wordmark fuzzes the name and opens the braces.
 export function Wordmark() {
@@ -65,6 +66,11 @@ export function Layout() {
       <main className="main" id="main">
         <Outlet />
       </main>
+      <nav className="legal-links" aria-label="Legal">
+        <Link to="/terms">Terms of use</Link>
+        <Link to="/privacy">Privacy and cookies</Link>
+      </nav>
+      <StorageNotice />
     </>
   );
 }

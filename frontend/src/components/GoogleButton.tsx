@@ -1,9 +1,10 @@
 // "Continue with Google", drawn to Google's sign-in button guidelines: white, a grey outline,
 // the full-color G, Roboto Medium.
 
-export function GoogleButton({ onClick, busy }: { onClick: () => void; busy: boolean }) {
+// `disabled` without `busy`: shown in place of Google's own button while that loads.
+export function GoogleButton({ onClick, busy, disabled = false }: { onClick: () => void; busy: boolean; disabled?: boolean }) {
   return (
-    <button type="button" className="google-button" onClick={onClick} disabled={busy}>
+    <button type="button" className="google-button" onClick={onClick} disabled={busy || disabled}>
       <svg className="google-button__logo" viewBox="0 0 48 48" aria-hidden="true">
         <path
           fill="#EA4335"

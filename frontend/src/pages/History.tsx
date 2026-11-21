@@ -10,9 +10,17 @@ import { FuzzText } from "../components/FuzzText";
 export function History() {
   const { session } = useSession();
   const [list, setList] = useState<ScanRecord[] | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
-    scans.listScans(session?.accessToken ?? "").then(setList);
+    let current = true;
+    scans
+      .listScans(session?.accessToken ?? "")
+      .then((l) => current && setList(l))
+      .catch((err: Error) => current && setFailure(err.message));
+    return () => {
+      current = false;
+    };
   }, [session]);
 
   return (
@@ -20,7 +28,11 @@ export function History() {
       <h1 className="page-title">
         <FuzzText text="Scan history" />
       </h1>
-      {list === null ? (
+      {failure ? (
+        <p className="notice notice--error" role="alert">
+          {failure}
+        </p>
+      ) : list === null ? (
         <p className="lede">Loading…</p>
       ) : list.length === 0 ? (
         <div className="empty">

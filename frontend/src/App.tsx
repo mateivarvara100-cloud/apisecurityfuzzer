@@ -3,6 +3,7 @@ import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { useSession } from "./auth/session";
 import { Layout } from "./components/Layout";
 import { History } from "./pages/History";
+import { Privacy, Terms } from "./pages/Legal";
 import { NewScan } from "./pages/NewScan";
 import { Sample } from "./pages/Sample";
 import { ScanReport } from "./pages/ScanReport";
@@ -39,6 +40,8 @@ export function App() {
       <Route element={<Layout />}>
         <Route index element={<Home />} />
         <Route path="sample" element={<Sample />} />
+        <Route path="terms" element={<Terms />} />
+        <Route path="privacy" element={<Privacy />} />
         <Route
           path="scans"
           element={

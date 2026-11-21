@@ -1,10 +1,16 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { API_URL, AUTH_MODE, GOOGLE_CLIENT_ID } from "../api/config";
 import { SAMPLE_REPORT } from "../api/service";
+import { codeClient, idTokenFor, loadGoogle, type CodeClient } from "../auth/google";
 import { authIsSimulated, useSession } from "../auth/session";
 import { Evidence } from "../components/Evidence";
 import { GoogleButton } from "../components/GoogleButton";
 import { FuzzText } from "../components/FuzzText";
+
+// Google's window from our own button needs Google's client id and the backend (which holds the
+// client secret). Without them, the button signs in through the Supabase redirect.
+const GOOGLE_POPUP = AUTH_MODE === "supabase" && !!GOOGLE_CLIENT_ID && !!API_URL;
 
 // The planted BOLA flaw, as the scanner recorded it: the first two requests are the token swap.
 const bola = SAMPLE_REPORT.findings.find((f) => f.check === "bola");
@@ -13,18 +19,54 @@ const swap = bola && { ...bola, evidence: bola.evidence.slice(0, 2) };
 const failed = (err: unknown) => (err instanceof Error ? err.message : "Sign-in failed. Try again.");
 
 export function SignIn() {
-  const { signInWithGoogle, signInWithPassword, notice } = useSession();
+  const { signInWithGoogle, signInWithGoogleToken, signInWithPassword, notice } = useSession();
+  // Google's window opens straight from our button once Google's script is loaded (on page load).
+  // "failed": it couldn't load, or isn't configured, and the button uses the Supabase redirect.
+  const google = useRef<CodeClient | null>(null);
+  const [gis, setGis] = useState<"loading" | "ready" | "failed">(GOOGLE_POPUP ? "loading" : "failed");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"google" | "password" | null>(null);
 
-  async function google() {
-    setBusy("google");
+  useEffect(() => {
+    if (!GOOGLE_POPUP) return;
+    let live = true;
+    loadGoogle()
+      .then((oauth2) => {
+        if (!live) return;
+        google.current = codeClient(oauth2, GOOGLE_CLIENT_ID, {
+          onCode: (code) => {
+            idTokenFor(code)
+              .then((idToken) => signInWithGoogleToken(idToken))
+              .catch((err) => setGoogleError(failed(err)))
+              .finally(() => setBusy(null));
+          },
+          onCancel: () => setBusy(null),
+          onError: (message) => {
+            setGoogleError(message);
+            setBusy(null);
+          },
+        });
+        setGis("ready");
+      })
+      .catch(() => live && setGis("failed"));
+    return () => {
+      live = false;
+    };
+  }, [signInWithGoogleToken]);
+
+  async function signInWithGoogleClick() {
     setGoogleError(null);
+    if (gis === "ready" && google.current) {
+      setBusy("google");
+      google.current.requestCode(); // must run inside the click, or the browser blocks Google's window
+      return;
+    }
+    setBusy("google");
     try {
-      await signInWithGoogle(); // on success the page goes to Google, so busy stays set
+      await signInWithGoogle(); // the Supabase redirect: the page goes to Google, so busy stays set
       if (authIsSimulated) setBusy(null);
     } catch (err) {
       setGoogleError(failed(err));
@@ -54,15 +96,20 @@ export function SignIn() {
           <FuzzText text="Sign in to run a scan" />
         </h1>
         <p className="lede">
-          Scans run on this server against the VulnShop lab only. Sign-in is limited to the project owner for now.
+          Sign in with Google or e-mail to scan the VulnShop lab, a deliberately vulnerable demo API, and keep your
+          reports for 30 days.
         </p>
         <div className="signin__google">
-          <GoogleButton onClick={google} busy={busy === "google"} />
+          <GoogleButton onClick={signInWithGoogleClick} busy={busy === "google"} disabled={gis === "loading"} />
           {refused && (
             <p className="notice notice--error" role="alert">
               {refused}
             </p>
           )}
+          <span className="field__hint signin__agree">
+            By continuing you agree to the <Link to="/terms">terms of use</Link> and confirm you've read the{" "}
+            <Link to="/privacy">privacy notice</Link>.
+          </span>
           {authIsSimulated && (
             <span className="field__hint">Preview build: no Supabase project is set up, so this signs you in at once.</span>
           )}

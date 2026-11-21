@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { CHECKS } from "../api/checks";
-import { ALLOWLIST, API_MODE, DEMO_TARGET, LIMITS } from "../api/config";
-import { precheck, ScanRefused, scans } from "../api/service";
+import { ALLOWLIST, API_MODE, DEMO_TARGET } from "../api/config";
+import { precheck, ScanRefused, scans, type Limits } from "../api/service";
 import type { CheckId } from "../api/types";
 import { useSession } from "../auth/session";
 import { plural } from "../lib/format";
@@ -23,12 +23,19 @@ export function NewScan() {
   const [error, setError] = useState<{ message: string; field?: Field } | null>(null);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const [left, setLeft] = useState<number | null>(null);
+  const [limits, setLimits] = useState<Limits | null>(null);
 
   const token = session?.accessToken ?? "";
 
   useEffect(() => {
-    scans.scansLeftToday(token).then(setLeft);
+    let current = true;
+    scans
+      .limits(token)
+      .then((l) => current && setLimits(l))
+      .catch((err: Error) => current && setError({ message: err.message }));
+    return () => {
+      current = false;
+    };
   }, [token]);
 
   useEffect(() => {
@@ -68,7 +75,7 @@ export function NewScan() {
       setError(
         err instanceof ScanRefused
           ? { message: err.message, field: err.field }
-          : { message: "The scan didn't start: the server gave no answer. Try again in a minute." },
+          : { message: err instanceof Error && err.message ? err.message : "The scan didn't start. Try again in a minute." },
       );
       setRunning(false);
     }
@@ -83,7 +90,7 @@ export function NewScan() {
   const invalid = (field: Field) => (error?.field === field ? true : undefined);
   const describedBy = (field: Field, hint?: string) =>
     [hint, error?.field === field ? `${field}-error` : undefined].filter(Boolean).join(" ") || undefined;
-  const noneLeft = left === 0;
+  const noneLeft = limits?.left === 0;
 
   return (
     <>
@@ -220,11 +227,11 @@ export function NewScan() {
               Start scan
             </button>
           )}
-          {left !== null && !running && (
+          {limits && !running && (
             <span className="scan-form__limits">
               {noneLeft
-                ? "You've used all of today's scans. The count resets at midnight."
-                : `${plural(left, "scan")} left today. Rate-limit bursts are capped at ${LIMITS.burst} requests.`}
+                ? "You've used all of today's scans. The count resets at midnight UTC."
+                : `${limits.left === null ? "No daily limit on this account." : `${plural(limits.left, "scan")} left today.`} Rate-limit bursts are capped at ${limits.burst} requests.`}
             </span>
           )}
         </div>

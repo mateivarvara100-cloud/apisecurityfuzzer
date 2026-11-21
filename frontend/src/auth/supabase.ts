@@ -18,7 +18,7 @@ function readRedirectError(): string | null {
   const code = get("error_code") ?? "";
   const description = get("error_description") ?? "";
   if (code === "signup_disabled" || /signups? not allowed/i.test(description)) {
-    return "This account can't sign in. Sign-in is limited to the project owner for now.";
+    return "New accounts can't be created right now. If you already have one, sign in with it.";
   }
   if (get("error") === "access_denied") return "Google sign-in was cancelled or refused. Try again.";
   return "Sign-in didn't finish. Try again.";
