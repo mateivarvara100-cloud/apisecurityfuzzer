@@ -4,6 +4,7 @@ import { API_MODE } from "../api/config";
 import { useSession } from "../auth/session";
 import { FuzzText } from "./FuzzText";
 import { Mark } from "./Mark";
+import { RequestField } from "./RequestField";
 
 // Pointing at the wordmark fuzzes the name and opens the braces.
 export function Wordmark() {
@@ -22,6 +23,7 @@ export function Layout() {
 
   return (
     <>
+      <RequestField />
       {API_MODE === "mock" && (
         <p className="mock-note">Preview build: no scan backend is connected, so every scan shows the recorded lab results.</p>
       )}
