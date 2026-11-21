@@ -5,9 +5,11 @@ import { Layout } from "./components/Layout";
 import { History } from "./pages/History";
 import { Privacy, Terms } from "./pages/Legal";
 import { NewScan } from "./pages/NewScan";
+import { ResetPassword } from "./pages/ResetPassword";
 import { Sample } from "./pages/Sample";
 import { ScanReport } from "./pages/ScanReport";
 import { SignIn } from "./pages/SignIn";
+import { SignUp } from "./pages/SignUp";
 
 // Until a saved session (or one coming back from Google) is known, show nothing rather than
 // sending a signed-in user to the sign-in page for a moment.
@@ -42,6 +44,8 @@ export function App() {
         <Route path="sample" element={<Sample />} />
         <Route path="terms" element={<Terms />} />
         <Route path="privacy" element={<Privacy />} />
+        <Route path="reset-password" element={<ResetPassword />} />
+        <Route path="sign-up" element={<SignUp />} />
         <Route
           path="scans"
           element={

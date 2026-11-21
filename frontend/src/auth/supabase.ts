@@ -20,6 +20,7 @@ function readRedirectError(): string | null {
   if (code === "signup_disabled" || /signups? not allowed/i.test(description)) {
     return "New accounts can't be created right now. If you already have one, sign in with it.";
   }
+  if (code === "otp_expired") return "That link has expired or was already used. Ask for a new one.";
   if (get("error") === "access_denied") return "Google sign-in was cancelled or refused. Try again.";
   return "Sign-in didn't finish. Try again.";
 }

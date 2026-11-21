@@ -153,7 +153,7 @@ export function Privacy() {
 
       <h2>Who processes it</h2>
       <ul>
-        <li>Supabase: accounts, sign-in and the scan history (hosted in the EU).</li>
+        <li>Supabase: accounts, sign-in, sign-in and password-reset e-mails, and the scan history (hosted in the EU).</li>
         <li>Render: runs the scan server.</li>
         <li>Vercel: serves this website.</li>
         <li>

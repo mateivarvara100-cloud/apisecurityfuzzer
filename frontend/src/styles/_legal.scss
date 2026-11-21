@@ -120,3 +120,59 @@
   display: block;
   margin-top: 10px;
 }
+
+// Password reset: one narrow form, like the sign-in column.
+.reset {
+  max-width: 420px;
+
+  &__form {
+    margin-top: 24px;
+    display: grid;
+    gap: 20px;
+  }
+
+  &__notice {
+    margin-top: 16px;
+  }
+
+  &__back {
+    margin-top: 24px;
+    font-size: var(--t-sm);
+  }
+}
+
+.signin__forgot {
+  justify-self: start;
+  margin-top: 4px;
+  font-size: var(--t-sm);
+  padding: 4px 0;
+
+  @include touch {
+    padding: 10px 0;
+  }
+}
+
+// Create an account: one column, like the password reset.
+.signup {
+  max-width: 420px;
+
+  .signin__google {
+    margin-top: 28px;
+  }
+
+  &__agree {
+    @include check-row;
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+  }
+
+  &__switch {
+    margin-top: 24px;
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+  }
+}
+
+.signin .signup__switch {
+  margin-top: 20px;
+}

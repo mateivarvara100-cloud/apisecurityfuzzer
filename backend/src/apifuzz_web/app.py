@@ -18,10 +18,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from apifuzz import __version__ as engine_version
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
 from apifuzz_web.auth import AuthError, AuthUnavailable, TokenVerifier, User
@@ -118,12 +119,17 @@ def create_app(
         fields = sorted({str(e["loc"][-1]) for e in exc.errors() if e.get("loc")})
         return JSONResponse({"detail": f"The request is malformed ({', '.join(fields) or 'body'})."}, status_code=400)
 
-    def current_user(authorization: str | None = Header(default=None)) -> User:
-        scheme, _, token = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not token.strip():
+    # Declares "Authorization: Bearer <Supabase access token>" in openapi.json, so the spec says
+    # which routes need a sign-in. auto_error=False: the answers below are ours, not FastAPI's.
+    bearer = HTTPBearer(auto_error=False, scheme_name="supabase", bearerFormat="JWT",
+                        description="The Supabase access token of the signed-in user.")
+
+    def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> User:
+        token = credentials.credentials.strip() if credentials and credentials.scheme.lower() == "bearer" else ""
+        if not token:
             raise HTTPException(401, "Sign in first.", headers={"WWW-Authenticate": "Bearer"})
         try:
-            user = verifier.verify(token.strip())
+            user = verifier.verify(token)
         except AuthError as exc:
             raise HTTPException(401, f"Sign in again: {exc}.", headers={"WWW-Authenticate": "Bearer"}) from exc
         except AuthUnavailable as exc:

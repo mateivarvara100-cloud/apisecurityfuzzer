@@ -438,3 +438,5 @@ and uploads. The published version is the one in `pyproject.toml`, not the git t
 ## What's next
 
 - A small hosted demo (Phase 4): the same engine behind a login, limited to approved targets.
+  In progress: the web app is in `frontend/` and its server in `backend/`. How to run and set
+  them up, including the e-mail settings, is in [backend/README.md](backend/README.md).
