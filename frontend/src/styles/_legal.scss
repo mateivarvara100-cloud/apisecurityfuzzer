@@ -176,3 +176,40 @@
 .signin .signup__switch {
   margin-top: 20px;
 }
+
+// Sign-up's right-hand column: the lab scan's findings, one row each, like the report's list.
+.lab-findings {
+  border-top: 1px solid var(--ink);
+
+  &__item {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr);
+    column-gap: 12px;
+    row-gap: 2px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--rule);
+
+    .sev {
+      grid-row: span 2;
+      align-self: start;
+      margin-top: 2px;
+    }
+  }
+
+  &__endpoint {
+    @include mono;
+    font-size: var(--t-xs);
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+  }
+
+  &__title {
+    font-size: var(--t-sm);
+    color: var(--ink);
+  }
+
+  &__more {
+    margin-top: 16px;
+    font-size: var(--t-sm);
+  }
+}
