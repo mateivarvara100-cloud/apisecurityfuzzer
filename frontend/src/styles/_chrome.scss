@@ -18,8 +18,9 @@
   top: 0;
   z-index: 10;
 
-  @supports (backdrop-filter: blur(1px)) {
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     background: rgb(20 20 24 / 0.8);
+    -webkit-backdrop-filter: saturate(1.4) blur(12px); // Safari before 18
     backdrop-filter: saturate(1.4) blur(12px);
   }
 
@@ -60,10 +61,23 @@
   }
 }
 
+@mixin open-mark {
+  .mark__brace--left {
+    transform: translateX(-2px);
+  }
+  .mark__brace--right {
+    transform: translateX(2px);
+  }
+  .mark__cursor {
+    animation: none;
+  }
+}
+
 .wordmark {
   display: inline-flex;
   align-items: center;
   gap: 9px;
+  min-height: 44px; // a full-size tap target, without changing how it looks
   font-weight: 800;
   font-size: var(--t-lg);
   letter-spacing: -0.01em;
@@ -75,17 +89,12 @@
     height: 20px;
   }
 
-  &:hover,
+  @include hover {
+    @include open-mark;
+  }
+
   &:focus-visible {
-    .mark__brace--left {
-      transform: translateX(-2px);
-    }
-    .mark__brace--right {
-      transform: translateX(2px);
-    }
-    .mark__cursor {
-      animation: none;
-    }
+    @include open-mark;
   }
 }
 
@@ -106,7 +115,7 @@
       background-color var(--t-fast) ease,
       box-shadow var(--t-med) var(--ease-out);
 
-    &:hover {
+    @include hover {
       color: var(--ink);
       background: var(--surface);
     }
@@ -129,11 +138,25 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
   font-size: var(--t-sm);
   color: var(--ink-2);
 
+  &__email {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  // On a phone the address would push Sign out onto a row of its own; the button's tooltip and
+  // label still say who is signed in.
   @include below(sm) {
     margin-left: auto;
+
+    &__email {
+      display: none;
+    }
   }
 }
 

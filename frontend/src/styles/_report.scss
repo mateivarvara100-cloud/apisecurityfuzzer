@@ -62,7 +62,7 @@
       opacity var(--t-fast) ease,
       transform var(--t-med) var(--ease-out);
 
-    &:hover {
+    @include hover {
       opacity: 0.85;
       transform: scaleY(0.8);
     }
@@ -119,7 +119,7 @@
     position: relative;
     transition: background-color var(--t-fast) ease;
 
-    &:hover {
+    @include hover {
       background: rgb(255 255 255 / 0.03);
     }
 
@@ -280,12 +280,18 @@
 
   a {
     font-weight: 600;
+
+    @include touch {
+      display: inline-block;
+      padding-block: 8px;
+      margin-block: -8px;
+    }
   }
 
   tbody tr {
     transition: background-color var(--t-fast) ease;
 
-    &:hover {
+    @include hover {
       background: var(--surface-2);
     }
   }

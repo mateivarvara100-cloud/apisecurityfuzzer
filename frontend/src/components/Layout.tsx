@@ -45,10 +45,11 @@ export function Layout() {
           </nav>
           {session && (
             <div className="account">
-              <span>{session.email}</span>
+              <span className="account__email">{session.email}</span>
               <button
                 type="button"
                 className="button button--quiet"
+                title={`Signed in as ${session.email}`}
                 onClick={() => {
                   signOut().then(() => navigate("/"));
                 }}

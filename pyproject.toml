@@ -45,6 +45,10 @@ apifuzz = "apifuzz.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/apifuzz"]
 
+# The source package is the Python project only; the web app in frontend/ is deployed separately.
+[tool.hatch.build.targets.sdist]
+exclude = ["/frontend", "/frontend/**"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
