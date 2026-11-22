@@ -1,0 +1,194 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "apifuzz practice API",
+    "version": "1.0.0",
+    "description": "Fake data and simulated flaws, for trying apifuzz's Your APIs. Test accounts: alice / alice-practice (token practice-token-alice) and bob / bob-practice (token practice-token-bob)."
+  },
+  "servers": [{ "url": "https://apifuzz-practice.vercel.app" }],
+  "components": {
+    "securitySchemes": {
+      "bearer": { "type": "http", "scheme": "bearer" }
+    },
+    "schemas": {
+      "User": {
+        "type": "object",
+        "properties": { "id": { "type": "integer" }, "username": { "type": "string" }, "email": { "type": "string" } }
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "owner": { "type": "integer" },
+          "item": { "type": "string" },
+          "total": { "type": "number" }
+        }
+      },
+      "Product": {
+        "type": "object",
+        "properties": { "id": { "type": "integer" }, "name": { "type": "string" }, "price": { "type": "number" } }
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": { "id": { "type": "integer" }, "owner": { "type": "integer" }, "amount": { "type": "number" } }
+      },
+      "ProjectIn": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string" }, "description": { "type": "string" } }
+      },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "owner": { "type": "integer" }
+        }
+      }
+    }
+  },
+  "security": [{ "bearer": [] }],
+  "paths": {
+    "/health": {
+      "get": { "security": [], "summary": "Is the API up", "responses": { "200": { "description": "ok" } } }
+    },
+    "/login": {
+      "post": {
+        "security": [],
+        "summary": "Log in and get a token",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["username", "password"],
+                "properties": { "username": { "type": "string" }, "password": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "a token" }, "401": { "description": "wrong username or password" } }
+      }
+    },
+    "/me": {
+      "get": {
+        "summary": "The signed-in user",
+        "responses": {
+          "200": { "description": "you", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "401": { "description": "login required" }
+        }
+      }
+    },
+    "/users/{id}": {
+      "get": {
+        "summary": "A user's profile",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "the user", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "401": { "description": "login required" },
+          "404": { "description": "no such user" }
+        }
+      }
+    },
+    "/orders": {
+      "get": {
+        "summary": "Your orders",
+        "responses": {
+          "200": {
+            "description": "your orders",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } } } }
+          },
+          "401": { "description": "login required" }
+        }
+      }
+    },
+    "/orders/{id}": {
+      "get": {
+        "summary": "One of your orders",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "the order", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Order" } } } },
+          "401": { "description": "login required" },
+          "404": { "description": "no such order" }
+        }
+      }
+    },
+    "/invoices/{id}": {
+      "get": {
+        "summary": "One of your invoices",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "the invoice", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Invoice" } } } },
+          "401": { "description": "login required" },
+          "404": { "description": "no such invoice" }
+        }
+      }
+    },
+    "/products": {
+      "get": {
+        "summary": "Every product (the same for every user)",
+        "responses": {
+          "200": {
+            "description": "products",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Product" } } } }
+          },
+          "401": { "description": "login required" }
+        }
+      }
+    },
+    "/products/{id}": {
+      "get": {
+        "summary": "One product (the same for every user)",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "the product", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Product" } } } },
+          "401": { "description": "login required" },
+          "404": { "description": "no such product" }
+        }
+      }
+    },
+    "/search": {
+      "get": {
+        "summary": "Search products by name",
+        "parameters": [{ "name": "q", "in": "query", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": {
+            "description": "matching products",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Product" } } } }
+          },
+          "401": { "description": "login required" }
+        }
+      }
+    },
+    "/projects": {
+      "post": {
+        "summary": "Create a project",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProjectIn" } } }
+        },
+        "responses": {
+          "201": { "description": "created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Project" } } } },
+          "401": { "description": "login required" }
+        }
+      }
+    },
+    "/projects/{id}": {
+      "get": {
+        "summary": "One of your projects",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "the project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Project" } } } },
+          "404": { "description": "no such project" }
+        }
+      },
+      "delete": {
+        "summary": "Delete one of your projects",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "204": { "description": "deleted" }, "404": { "description": "no such project" } }
+      }
+    }
+  }
+}

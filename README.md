@@ -398,6 +398,10 @@ permission. An admin can still approve or reject an API by hand. In the scan for
 bearer tokens of two test accounts for that scan; they are never stored. Without a public
 address, use the CLI ([Scan your own API](#scan-your-own-api)).
 
+No API of your own to try it on? [testapi/](testapi/) is a practice API with fake data and
+simulated flaws that you can deploy to Vercel in a few clicks, in a vulnerable, a fixed and an
+unpublished-spec variant.
+
 Limits: 5 scans per account per day, 50 for the whole server, one scan at a time, at most 400
 requests per scan; up to 3 own APIs per account, each scanned at most 3 times a day.
 

@@ -58,6 +58,8 @@ _OPERATOR = {"$ne": _MARKER}  # an object where a scalar is expected: the NoSQL 
 # Statuses that mean the request was handled (so a baseline or a probe settles something). A 404
 # for a sample value, or a 5xx with no database signature, settles nothing on its own.
 _HANDLED = {200, 201, 202, 204, 400, 401, 403, 409, 422}
+# How an API refuses a value of the wrong type. An operator object answered this way was rejected.
+_TYPE_REJECTED = {400, 422}
 
 # Words (in a path segment or the operation id) that mark an endpoint whose body is a query, not
 # new data: safe to probe with injection markers because nothing is created or changed.
@@ -328,10 +330,12 @@ class Injection(Check):
                     evidence=[true1, false1],
                 )
 
-        # 3) NoSQL operator object where a scalar is expected (body fields only).
+        # 3) NoSQL operator object where a scalar is expected (body fields only). Only an object
+        # that is accepted counts: a 400 or 422 is the API rejecting the wrong type, which is the
+        # right answer (a typed API such as FastAPI gives 422), however its baseline was answered.
         if allow_nosql:
             op1 = send(_OPERATOR)
-            if ok(op1) and _differs(op1, baseline):
+            if ok(op1) and op1.response.status_code not in _TYPE_REJECTED and _differs(op1, baseline):
                 op2 = send(_OPERATOR)
                 if _result_size(op2) == _result_size(op1) and _differs(op2, baseline):
                     return finding(

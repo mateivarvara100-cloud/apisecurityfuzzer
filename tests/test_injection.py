@@ -148,6 +148,17 @@ class TestBodyFields:
         assert len(findings) == 1 and findings[0].key == "username"
         assert "NoSQL operator" in findings[0].detail
 
+    # A typed API rejects the operator object as the wrong type (400, or FastAPI's 422). That is the
+    # right answer, not injection, even though it differs from a plain wrong login's 401.
+    @pytest.mark.parametrize("rejection", [400, 422])
+    def test_an_operator_object_rejected_as_the_wrong_type_is_clean(self, rejection):
+        def typed(request):
+            if any(isinstance(_field(request, f), dict) for f in ("username", "password")):
+                return httpx.Response(rejection, json={"detail": "username and password must be strings"})
+            return httpx.Response(401, json={"error": "bad credentials"})
+
+        assert list(Injection().run(LOGIN, _ctx(typed))) == []
+
     # A login that treats input as plain text is clean.
     def test_safe_login_is_clean(self):
         ctx = _ctx(lambda r: httpx.Response(401, json={"error": "bad credentials"}))
