@@ -1,0 +1,182 @@
+// Users' own APIs: the target picker on the scan form, and the "Your APIs" page.
+@use "mixins" as *;
+
+// ---- the target picker (scan form) ----
+.targets {
+  display: grid;
+  border-top: 1px solid var(--rule);
+  margin: 0 -8px; // like the checklist: rows bleed 8px for their hover wash
+
+  &__item {
+    @include check-row;
+    padding: 12px 8px;
+    border-bottom: 1px solid var(--rule);
+    border-radius: var(--radius);
+    transition: background-color var(--t-fast) ease;
+
+    @include hover {
+      background: var(--surface);
+    }
+
+    // The chosen target carries the same left mark as a confirmed consent box.
+    &:has(input:checked) {
+      background: var(--actor-a-tint);
+      box-shadow: inset 3px 0 0 var(--accent-text);
+    }
+  }
+
+  &__name {
+    font-weight: 600;
+  }
+
+  &__url {
+    @include mono;
+    color: var(--ink-2);
+    margin-left: 8px;
+    overflow-wrap: anywhere;
+  }
+
+  &__detail {
+    display: block;
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+  }
+
+  &__add {
+    margin-top: 10px;
+  }
+}
+
+.tokens {
+  display: grid;
+  gap: 16px;
+
+  &__intro {
+    margin: 0;
+  }
+}
+
+// ---- the Your APIs page ----
+.api-rules {
+  margin: 24px 0 32px;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  max-width: 70ch;
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+}
+
+.api-list {
+  list-style: none;
+  margin: 0 0 48px;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+  max-width: 900px;
+
+  &__item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 200px auto;
+    gap: 8px 24px;
+    align-items: center;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--rule);
+
+    @include below(sm) {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: start;
+    }
+  }
+
+  &__name {
+    display: block;
+    font-weight: 600;
+  }
+
+  &__url {
+    @include mono;
+    display: block;
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+  }
+
+  &__note {
+    display: block;
+    margin-top: 6px;
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px 16px;
+
+    @include below(sm) {
+      justify-content: flex-start;
+    }
+  }
+
+  &__confirm {
+    font-size: var(--t-sm);
+  }
+}
+
+// Waiting is quiet grey, approved is plain white, not approved is red: the same three tones the
+// rest of the site uses for "no token", account A and account B.
+.api-status {
+  font-size: var(--t-sm);
+  font-weight: 600;
+
+  &--pending {
+    color: var(--ink-3);
+  }
+
+  &--approved {
+    color: var(--ink);
+  }
+
+  &--rejected {
+    color: var(--accent-text);
+  }
+
+  &__sub {
+    display: block;
+    font-size: var(--t-xs);
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+}
+
+.api-form {
+  margin-top: 16px;
+  display: grid;
+  gap: 20px;
+  max-width: 560px;
+}
+
+.section-title + .api-form,
+.section-title + .field__hint {
+  margin-top: 16px;
+}
+
+// A text-styled button for secondary actions (Remove, Keep).
+.link-button {
+  @include reset-button;
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-size: var(--t-sm);
+  @include pressable;
+
+  @include touch {
+    padding: 8px 4px;
+  }
+}
+
+.notice--ok {
+  border-left-color: var(--ok);
+  background: var(--surface);
+}

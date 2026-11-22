@@ -37,11 +37,23 @@ public address of its own.
 ## What has to be set up outside this repository
 
 **Supabase**
-- Apply the migrations in [supabase/migrations](supabase/migrations) (the `scans` table and the
-  server's grants on it).
+- Apply the migrations in [supabase/migrations](supabase/migrations), in order (SQL editor: paste
+  each file and run it): the `scans` table and the server's grants on it, the rule that keeps
+  passwords off Google accounts, and the `targets` table for users' own APIs.
 - Put the project's secret key (`sb_secret_...`) in `SUPABASE_SECRET_KEY`. Without it, scans are
   kept in memory and lost when the server stops.
 - Admins: set `app_metadata.role` to `"admin"` on the account (SQL editor), then sign in again.
+
+**Users' own APIs (approving them)**
+- A user adds an API on the Your APIs page; it is saved in `targets` with status `pending`.
+- To decide: Supabase -> Table Editor -> `targets`, set `status` to `approved` or `rejected`, and
+  optionally a short `note` the user sees (say why, when you reject). Check that the address is
+  plausibly theirs before approving; the app can't prove ownership yet.
+- Only approved APIs can be scanned, with two test-account tokens the user pastes for that scan
+  (never stored). Every connection a scan opens is checked: HTTPS only, ports 443/8443, public
+  addresses only (private, loopback, link-local/metadata and similar are refused, also when a name
+  changes its answer mid-scan), no redirects, answers capped at 5 MB. A spec may not refer to other
+  documents. Limits: `TARGETS_PER_USER` (default 3) and `SCANS_PER_TARGET_PER_DAY` (default 3).
 
 **Google sign-in**
 - The OAuth web client's id and secret go in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Google

@@ -10,6 +10,8 @@ from typing import Any  # type hint meaning "any value" (a spec can contain anyt
 
 import httpx  # HTTP library; used here only to download a spec when given a URL
 from prance import ResolvingParser, ValidationError  # prance parses, fills in $refs, validates
+from prance.util.formats import parse_spec  # prance's JSON/YAML reader, used before resolving
+from prance.util.resolver import RESOLVE_INTERNAL  # follow only "#/..." references
 from prance.util.url import ResolutionError  # what prance raises when a $ref points nowhere
 
 from apifuzz import __version__
@@ -48,6 +50,11 @@ def load_spec(
     # Step 2: an empty file would make prance crash with a confusing internal error, so catch it here.
     if not text.strip():
         raise SpecError(f"{source}: the spec is empty")
+    # Step 2b: a $ref may only point inside this spec ("#/components/..."). One that names another
+    # document ("http://...", "other.yaml#/...", "file:///...") would make prance fetch that URL or
+    # read that file, which a spec must never be able to do: a downloaded spec could otherwise
+    # point the scanner at internal addresses or local files, past the allowlist.
+    _refuse_external_refs(source, text)
 
     # Step 3: let prance parse the text, replace every $ref with its real content, and validate.
     try:
@@ -55,6 +62,9 @@ def load_spec(
             spec_string=text,  # we pass the text itself, so files and URLs share one code path
             backend="openapi-spec-validator",  # which library checks the spec against OpenAPI rules
             strict=True,  # an invalid spec raises an error instead of only printing a warning
+            # prance itself resolves only "#/..." references. This is not what keeps other documents
+            # out (the validator can still fetch one): _refuse_external_refs above is.
+            resolve_types=RESOLVE_INTERNAL,
             recursion_limit_handler=_cut_recursive_ref,  # what to do with self-referencing schemas
         )
     except ValidationError as exc:
@@ -126,6 +136,28 @@ def _fetch(url: str, client: httpx.Client | None, follow_redirects: bool = True)
         # `finally` runs whether we returned or raised, so the connection is always cleaned up.
         if owns_client:
             client.close()
+
+
+def _refuse_external_refs(source: str, text: str) -> None:
+    """Raise SpecError if any $ref points outside the spec. Text that doesn't parse is left to prance."""
+    try:
+        document = parse_spec(text)
+    except Exception:  # noqa: BLE001 - prance reports a broken document itself, with a better message
+        return
+    stack: list[Any] = [document]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and not ref.startswith("#"):
+                shown = ref if len(ref) <= 120 else ref[:117] + "..."
+                raise SpecError(
+                    f"{source}: a $ref points outside the spec ({shown}). apifuzz follows only references "
+                    "inside the spec (#/...); bundle the spec into one document first."
+                )
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
 
 
 def _cut_recursive_ref(limit: int, parsed_url: Any, recursions: Any = ()) -> dict[str, Any]:

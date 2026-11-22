@@ -4,16 +4,19 @@
 // against its own allowlist and keeps the history.
 
 import sample from "../data/sample-scan.json";
-import { ALLOWLIST, API_MODE, API_URL, LIMITS } from "./config";
-import type { CheckId, Report, ScanRecord, ScanRequest } from "./types";
+import { API_MODE, API_URL, LAB, LIMITS } from "./config";
+import type { CheckId, NewTarget, OwnTarget, Report, ScanRecord, ScanRequest, TargetList } from "./types";
 
 export const SAMPLE_REPORT = sample as Report;
+
+const FIELDS = ["target", "specUrl", "authorized", "checks", "limit", "label", "url", "tokenA", "tokenB"] as const;
+type RefusalField = (typeof FIELDS)[number];
 
 /** A refusal the user can act on. `field` names the form field it belongs to, if any. */
 export class ScanRefused extends Error {
   constructor(
     message: string,
-    readonly field?: "target" | "specUrl" | "authorized" | "checks" | "limit",
+    readonly field?: RefusalField,
   ) {
     super(message);
   }
@@ -32,7 +35,12 @@ export interface ScanService {
   limits(accessToken: string): Promise<Limits>;
 }
 
-const allowedHosts = () => ALLOWLIST.map((a) => a.host);
+/** The user's own APIs: added here, approved by an admin, then offered in the scan form. */
+export interface TargetService {
+  list(accessToken: string): Promise<TargetList>;
+  add(target: NewTarget, accessToken: string): Promise<OwnTarget>;
+  remove(id: string, accessToken: string): Promise<void>;
+}
 
 function parse(url: string): URL | null {
   try {
@@ -51,9 +59,11 @@ const hasCredentials = (url: string) => {
   return !!u && (u.username !== "" || u.password !== "");
 };
 
-/** The same rules the server applies, checked first so a refusal can be explained in the form. */
-export function precheck(req: ScanRequest): ScanRefused | null {
-  const allowed = allowedHosts();
+/**
+ * The same rules the server applies, checked first so a refusal can be explained in the form.
+ * `allowed` lists the origins this user may scan: the lab and their approved APIs.
+ */
+export function precheck(req: ScanRequest, allowed: string[] = [LAB.url]): ScanRefused | null {
   for (const [value, field] of [
     [req.target, "target"],
     [req.specUrl, "specUrl"],
@@ -62,26 +72,40 @@ export function precheck(req: ScanRequest): ScanRefused | null {
       return new ScanRefused("Take the user name and password out of the address; scans log in as the test accounts.", field);
     }
   }
-  const target = hostOf(req.target);
-  if (!target) return new ScanRefused("Enter the target as a full address, like http://127.0.0.1:8000.", "target");
-  if (!allowed.includes(target)) {
-    return new ScanRefused(
-      `${target} is not on this server's allowlist, so it can't be scanned. Allowed: ${allowed.join(", ")}.`,
-      "target",
-    );
+  const target = parse(req.target);
+  if (!target) return new ScanRefused("Choose what to scan.", "target");
+  if (!allowed.includes(target.origin)) {
+    return new ScanRefused(`${target.host} isn't the lab or one of your approved APIs, so it can't be scanned.`, "target");
   }
-  const spec = hostOf(req.specUrl);
-  if (!spec) return new ScanRefused("Enter the spec as a full address, like http://127.0.0.1:8000/openapi.json.", "specUrl");
-  if (!allowed.includes(spec)) {
-    return new ScanRefused(
-      `The spec is downloaded by the server too, so its host must be allowed. ${spec} is not on the allowlist.`,
-      "specUrl",
-    );
+  if (hostOf(req.specUrl) !== target.host) {
+    return new ScanRefused("The spec is downloaded by the server too, so it has to be on the target's own address.", "specUrl");
   }
   if (req.checks.length === 0) return new ScanRefused("Choose at least one check to run.", "checks");
+  const a = req.tokenA?.trim(), b = req.tokenB?.trim();
+  if (a && b && a === b) {
+    return new ScanRefused("Accounts A and B need different tokens: they have to be two different users.", "tokenB");
+  }
   if (!req.authorized) {
     return new ScanRefused("Confirm that you own this target or have written permission to test it.", "authorized");
   }
+  return null;
+}
+
+/** What the API form checks before sending; the server checks again, and resolves the address. */
+export function precheckTarget(t: NewTarget): ScanRefused | null {
+  const label = t.label.trim();
+  if (!label || label.length > 60) return new ScanRefused("Give the API a name of 1 to 60 characters.", "label");
+  const url = parse(t.url.trim());
+  if (!url) return new ScanRefused("Enter the API's address, like https://api.example.com.", "url");
+  if (url.protocol !== "https:") return new ScanRefused("Use an https:// address. Only APIs served over HTTPS can be scanned.", "url");
+  if (url.username || url.password) return new ScanRefused("Take the user name and password out of the address.", "url");
+  if (url.port && url.port !== "8443") return new ScanRefused("Only the standard HTTPS ports can be scanned: 443 or 8443.", "url");
+  const spec = parse(t.specUrl.trim());
+  if (!spec) return new ScanRefused("Enter the address of the API's OpenAPI spec.", "specUrl");
+  if (spec.origin !== url.origin) {
+    return new ScanRefused(`The spec has to be on the API's own address (${url.origin}), because the server downloads it with the same safety rules as the scan.`, "specUrl");
+  }
+  if (!t.authorized) return new ScanRefused("Confirm that you own this API or have written permission to test it.", "authorized");
   return null;
 }
 
@@ -143,7 +167,7 @@ const todayCount = (scans: ScanRecord[]) => {
 
 const mockService: ScanService = {
   async startScan(req) {
-    const refused = precheck(req);
+    const refused = precheck(req, [LAB.url, ...readTargets().map((t) => new URL(t.url).origin)]);
     if (refused) throw refused;
     const history = readHistory();
     if (todayCount(history) >= LIMITS.scansPerDay) {
@@ -173,10 +197,56 @@ const mockService: ScanService = {
   },
 };
 
-// ---- live -------------------------------------------------------------------------------
+// Preview mode: APIs are kept in this browser and approved at once, so the whole flow can be tried.
+const TARGETS_KEY = "apifuzz-web:targets";
 
-const FIELDS = ["target", "specUrl", "authorized", "checks", "limit"] as const;
-type RefusalField = (typeof FIELDS)[number];
+function readTargets(): OwnTarget[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(TARGETS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? (parsed as OwnTarget[]).filter((t) => t && typeof t.id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTargets(targets: OwnTarget[]): void {
+  try {
+    localStorage.setItem(TARGETS_KEY, JSON.stringify(targets));
+  } catch {
+    // storage blocked: the list lasts until the page reloads
+  }
+}
+
+const mockTargets: TargetService = {
+  async list() {
+    return { targets: readTargets(), maxTargets: 3, scansPerTargetPerDay: 3 };
+  },
+  async add(t) {
+    const refused = precheckTarget(t);
+    if (refused) throw refused;
+    const current = readTargets();
+    const url = new URL(t.url.trim()).origin;
+    if (current.some((x) => x.url === url)) throw new ScanRefused("You've already added that API.", "url");
+    if (current.length >= 3) throw new ScanRefused("You can have 3 APIs at most. Remove one to add another.", "limit");
+    const target: OwnTarget = {
+      id: crypto.randomUUID(),
+      label: t.label.trim(),
+      url,
+      specUrl: t.specUrl.trim(),
+      status: "approved",
+      note: null,
+      createdAt: new Date().toISOString(),
+      scansLeftToday: 3,
+    };
+    writeTargets([...current, target]);
+    return target;
+  },
+  async remove(id) {
+    writeTargets(readTargets().filter((t) => t.id !== id));
+  },
+};
+
+// ---- live -------------------------------------------------------------------------------
 
 /** A failure the form can't fix: the server is away, or the sign-in ran out. */
 export class ServiceError extends Error {}
@@ -216,8 +286,7 @@ function refusal(status: number, body: unknown): ScanRefused {
 
 const liveService: ScanService = {
   async startScan(req, token) {
-    const refused = precheck(req);
-    if (refused) throw refused;
+    // The form has already prechecked against this user's targets; the server checks everything again.
     const { status, body } = await call("/scans", token, { method: "POST", body: JSON.stringify(req) });
     if (status !== 201 || !isScanRecord(body)) throw refusal(status, body);
     return body;
@@ -244,4 +313,34 @@ const liveService: ScanService = {
   },
 };
 
+const isTarget = (t: unknown): t is OwnTarget => {
+  const x = t as OwnTarget | null;
+  return !!x && typeof x.id === "string" && typeof x.url === "string" && typeof x.status === "string";
+};
+
+const liveTargets: TargetService = {
+  async list(token) {
+    const { status, body } = await call("/targets", token);
+    const b = body as Partial<TargetList> | null;
+    if (status !== 200 || !b || !Array.isArray(b.targets)) throw new ServiceError(refusal(status, body).message);
+    return {
+      targets: b.targets.filter(isTarget),
+      maxTargets: typeof b.maxTargets === "number" ? b.maxTargets : 3,
+      scansPerTargetPerDay: typeof b.scansPerTargetPerDay === "number" ? b.scansPerTargetPerDay : 3,
+    };
+  },
+  async add(t, token) {
+    const refused = precheckTarget(t);
+    if (refused) throw refused;
+    const { status, body } = await call("/targets", token, { method: "POST", body: JSON.stringify(t) });
+    if (status !== 201 || !isTarget(body)) throw refusal(status, body);
+    return body;
+  },
+  async remove(id, token) {
+    const { status, body } = await call(`/targets/${encodeURIComponent(id)}`, token, { method: "DELETE" });
+    if (status !== 204 && status !== 404) throw new ServiceError(refusal(status, body).message);
+  },
+};
+
 export const scans: ScanService = API_MODE === "live" ? liveService : mockService;
+export const targets: TargetService = API_MODE === "live" ? liveTargets : mockTargets;

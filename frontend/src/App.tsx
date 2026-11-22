@@ -10,6 +10,7 @@ import { Sample } from "./pages/Sample";
 import { ScanReport } from "./pages/ScanReport";
 import { SignIn } from "./pages/SignIn";
 import { SignUp } from "./pages/SignUp";
+import { YourApis } from "./pages/YourApis";
 
 // Until a saved session (or one coming back from Google) is known, show nothing rather than
 // sending a signed-in user to the sign-in page for a moment.
@@ -51,6 +52,14 @@ export function App() {
           element={
             <RequireSession>
               <History />
+            </RequireSession>
+          }
+        />
+        <Route
+          path="apis"
+          element={
+            <RequireSession>
+              <YourApis />
             </RequireSession>
           }
         />

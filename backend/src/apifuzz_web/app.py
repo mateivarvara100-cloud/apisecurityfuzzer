@@ -2,6 +2,9 @@
 
     GET  /health       is the server up (no sign-in; Render's health check)
     GET  /me           who you are, your scans left today, the targets you may scan
+    GET  /targets      your own APIs and whether each is approved
+    POST /targets      ask for one of your APIs to be added (an admin approves it)
+    DELETE /targets/{id}  remove one of your APIs
     POST /scans        run a scan; answers with the finished report
     GET  /scans        your scans, newest first (an admin sees everyone's)
     GET  /scans/{id}   one scan; someone else's is "not found", the same as one that doesn't exist
@@ -30,12 +33,13 @@ from apifuzz_web.config import Config, ConfigError, Target, load_config, origin_
 from apifuzz_web.engine import ScanFailed, ScanOutcome, in_engine_order, scan_target
 from apifuzz_web.google import GoogleCodeExchange, GoogleSignInError, GoogleUnavailable
 from apifuzz_web.guards import Guards, RateLimiter, client_ip
-from apifuzz_web.store import MemoryStore, ScanRow, Store, StoreError, SupabaseStore, is_uuid
+from apifuzz_web.netguard import BlockedAddress, check_user_url, public_addresses
+from apifuzz_web.store import MemoryStore, ScanRow, Store, StoreError, SupabaseStore, TargetRow, is_uuid
 
 log = logging.getLogger("apifuzz_web")
 
 CheckId = Literal["bola", "auth-required", "mass-assignment", "rate-limit", "injection"]
-FormField = Literal["target", "specUrl", "authorized", "checks", "limit"]
+FormField = Literal["target", "specUrl", "authorized", "checks", "limit", "label", "url", "tokenA", "tokenB"]
 
 
 class Refused(Exception):
@@ -53,6 +57,19 @@ class ScanIn(BaseModel):
     specUrl: str = Field(max_length=2048)  # noqa: N815 (the web app's field name)
     checks: list[CheckId] = Field(min_length=1, max_length=5)
     authorized: bool
+    # Bearer tokens of two test accounts on the user's own API. Used for this one scan, in memory
+    # only: never stored, never logged, and removed from the report. Not used for the lab.
+    tokenA: str | None = Field(default=None, max_length=4096)  # noqa: N815
+    tokenB: str | None = Field(default=None, max_length=4096)  # noqa: N815
+
+
+class TargetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(max_length=200)
+    url: str = Field(max_length=300)
+    specUrl: str = Field(max_length=2048)  # noqa: N815
+    authorized: bool
 
 
 class GoogleCodeIn(BaseModel):
@@ -66,6 +83,18 @@ Runner = Callable[[Target, str, list[str], Config], ScanOutcome]
 
 def _midnight_utc(now: datetime) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _clean_token(value: str | None, field: FormField) -> str | None:
+    """A pasted token, without a "Bearer " prefix or spaces; Refused if it can't be sent in a header."""
+    token = (value or "").strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    if not token:
+        return None
+    if not all(33 <= ord(c) <= 126 for c in token):
+        raise Refused(400, "That token has characters a request header can't carry. Paste just the token.", field)
+    return token
 
 
 def create_app(
@@ -103,7 +132,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(config.allowed_origins),
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
         allow_credentials=False,  # the sign-in travels in the Authorization header, not a cookie
         max_age=600,
@@ -155,7 +184,37 @@ def create_app(
             record["ownerEmail"] = row.user_email
         return record
 
-    def pick_target(body: ScanIn) -> Target:
+    def target_record(row: TargetRow, now: datetime) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "id": row.id, "label": row.label, "url": row.base_url, "specUrl": row.spec_url,
+            "status": row.status, "note": row.note, "createdAt": row.created_at,
+        }
+        if row.status == "approved":
+            used = store.count_since(_midnight_utc(now), target=row.base_url)
+            record["scansLeftToday"] = max(0, config.scans_per_target_per_day - used)
+        return record
+
+    def own_target(body: ScanIn, user: User, target_origin: str) -> Target | None:
+        """The user's own API at this address, ready to scan, or None if they have none there."""
+        row = next((t for t in store.list_targets(user.id) if t.base_url == target_origin), None)
+        if row is None:
+            return None
+        if row.status == "pending":
+            raise Refused(403, f"{row.label} is waiting for approval. You can scan it once an admin approves it.",
+                          "target")
+        if row.status != "approved":
+            raise Refused(403, f"{row.label} wasn't approved for scanning, so it can't be scanned.", "target")
+        if body.specUrl.strip() != row.spec_url:
+            raise Refused(403, f"Scan {row.label} with the spec it was approved with: {row.spec_url}", "specUrl")
+        tokens = {"APIFUZZ_TOKEN_A": _clean_token(body.tokenA, "tokenA"),
+                  "APIFUZZ_TOKEN_B": _clean_token(body.tokenB, "tokenB")}
+        if tokens["APIFUZZ_TOKEN_A"] and tokens["APIFUZZ_TOKEN_A"] == tokens["APIFUZZ_TOKEN_B"]:
+            raise Refused(400, "Accounts A and B need different tokens: they have to be two different users.",
+                          "tokenB")
+        return Target(id=row.id, label=row.label, base_url=row.base_url, spec_url=row.spec_url,
+                      engine_env={k: v for k, v in tokens.items() if v}, guarded=True)
+
+    def pick_target(body: ScanIn, user: User) -> Target:
         try:
             target_origin = origin_of(body.target)
         except ConfigError:
@@ -163,9 +222,12 @@ def create_app(
                                "like http://127.0.0.1:8000.", "target") from None
         target = next((t for t in config.targets if t.base_url == target_origin), None)
         if target is None:
-            allowed = ", ".join(t.base_url for t in config.targets)
-            raise Refused(403, f"{target_origin} is not on this server's allowlist, so it can't be scanned. "
-                               f"Allowed: {allowed}.", "target")
+            mine = own_target(body, user, target_origin)
+            if mine is not None:
+                return mine
+            labs = ", ".join(t.base_url for t in config.targets)
+            raise Refused(403, f"{target_origin} isn't the lab ({labs}) or one of your approved APIs, so it "
+                               "can't be scanned. Add it under Your APIs first.", "target")
         try:
             spec_origin = origin_of(body.specUrl)
         except ConfigError:
@@ -213,7 +275,7 @@ def create_app(
         if not body.authorized:
             raise Refused(400, "Confirm that you own this target or have written permission to test it.",
                           "authorized")
-        target = pick_target(body)
+        target = pick_target(body, user)
         checks = in_engine_order(list(body.checks))
         if not scan_lock.acquire(timeout=config.scan_wait):
             raise Refused(503, "Another scan is running. Try again in a minute.")
@@ -227,6 +289,10 @@ def create_app(
                 if store.count_since(_midnight_utc(now)) >= config.global_scans_per_day:
                     raise Refused(429, "This server has run all the scans it allows today. "
                                        "Try again after midnight UTC.", "limit")
+                if target.guarded and (store.count_since(_midnight_utc(now), target=target.base_url)
+                                       >= config.scans_per_target_per_day):
+                    raise Refused(429, f"{target.label} has been scanned {config.scans_per_target_per_day} times "
+                                       "today, the most one API may be. Try again after midnight UTC.", "limit")
             row = ScanRow(user_id=user.id, user_email=user.email, target=target.base_url,
                           spec_url=body.specUrl, checks=checks, status="done", requests_sent=0,
                           created_at=now.isoformat(timespec="seconds"))
@@ -244,6 +310,58 @@ def create_app(
         finally:
             scan_lock.release()
 
+    @app.get("/targets")
+    def list_targets(user: User = Depends(current_user)) -> dict[str, Any]:
+        now = clock()
+        return {
+            "targets": [target_record(t, now) for t in store.list_targets(user.id)],
+            "maxTargets": config.targets_per_user,
+            "scansPerTargetPerDay": config.scans_per_target_per_day,
+        }
+
+    @app.post("/targets", status_code=201)
+    def add_target(body: TargetIn, user: User = Depends(current_user)) -> dict[str, Any]:
+        if not body.authorized:
+            raise Refused(400, "Confirm that you own this API or have written permission to test it.",
+                          "authorized")
+        label = " ".join(body.label.split())
+        if not 1 <= len(label) <= 60:
+            raise Refused(400, "Give the API a name of 1 to 60 characters.", "label")
+        try:
+            base_url = check_user_url(body.url)
+        except ValueError as exc:
+            raise Refused(400, str(exc), "url") from None
+        spec_url = body.specUrl.strip()
+        try:
+            spec_origin = check_user_url(spec_url)
+        except ValueError as exc:
+            raise Refused(400, f"The spec address: {exc}", "specUrl") from None
+        if spec_origin != base_url:
+            raise Refused(400, f"The spec has to be on the API's own address ({base_url}), because the server "
+                               "downloads it with the same safety rules as the scan.", "specUrl")
+        mine = store.list_targets(user.id)
+        if any(t.base_url == base_url for t in mine):
+            raise Refused(409, "You've already added that API.", "url")
+        if not user.is_admin and len(mine) >= config.targets_per_user:
+            raise Refused(429, f"You can have {config.targets_per_user} APIs at most. Remove one to add another.",
+                          "limit")
+        host, _, port = base_url.removeprefix("https://").partition(":")
+        try:
+            public_addresses(host, int(port or 443))  # an early, clear answer; every scan checks again
+        except BlockedAddress as exc:
+            raise Refused(400, f"{exc}. Only APIs on the public internet can be scanned.", "url") from None
+        row = TargetRow(user_id=user.id, user_email=user.email, label=label, base_url=base_url,
+                        spec_url=spec_url, created_at=clock().isoformat(timespec="seconds"))
+        store.add_target(row)
+        log.info("target requested: %s by %s", base_url, user.id)
+        return target_record(row, clock())
+
+    @app.delete("/targets/{target_id}", status_code=204)
+    def delete_target(target_id: str, user: User = Depends(current_user)) -> None:
+        # Someone else's target looks exactly like a missing one.
+        if not is_uuid(target_id) or not store.delete_target(target_id, user.id):
+            raise HTTPException(404, "No such API.")
+
     @app.get("/scans")
     def list_scans(user: User = Depends(current_user)) -> list[dict[str, Any]]:
         rows = store.list(None if user.is_admin else user.id)
@@ -259,8 +377,8 @@ def create_app(
 
     @app.exception_handler(StoreError)
     async def store_down(_: Request, exc: StoreError) -> JSONResponse:
-        log.error("scans table: %s", exc)
-        return JSONResponse({"detail": "Scan history is unavailable right now. Try again in a minute."},
+        log.error("database: %s", exc)
+        return JSONResponse({"detail": "Saved scans and APIs are unavailable right now. Try again in a minute."},
                             status_code=503)
 
     return app

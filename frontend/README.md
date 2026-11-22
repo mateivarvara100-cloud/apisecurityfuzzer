@@ -1,8 +1,8 @@
 # apifuzz web
 
 The front end of the hosted demo, live at <https://apifuzz.vercel.app>. A signed-in user picks
-the checks, confirms they are allowed to test the target, starts a scan of the VulnShop lab, and
-reads the same findings the CLI produces. It never runs checks itself: the backend
+a target (the VulnShop lab, or one of their own APIs once an admin approves it), picks the checks,
+confirms they are allowed to test it, starts a scan, and reads the same findings the CLI produces. It never runs checks itself: the backend
 ([../backend](../backend)) runs the apifuzz engine and returns its JSON report.
 
 React 19 + TypeScript, built with Vite, styled with SCSS. Deployed on Vercel.
@@ -66,7 +66,7 @@ hostnames) must list the site's address. The setup is in [../backend/README.md](
 | `src/api/` | Report types (mirroring `report.py`), the check list, settings, and the scan service (live or mock) |
 | `src/auth/` | Sign-in state, the Supabase client, Google's code flow, and the Turnstile loader |
 | `src/components/` | Layout, the report view, a finding, the evidence timeline, the Google button, the bot check, the storage notice |
-| `src/pages/` | Sign in, sign up, reset password, new scan, history, scan report, sample report, terms and privacy |
+| `src/pages/` | Sign in, sign up, reset password, new scan, your APIs, history, scan report, sample report, terms and privacy |
 | `src/lib/` | Evidence ordering, formatting, motion helpers |
 | `src/styles/` | SCSS partials: tokens, mixins, base, chrome, forms, report, evidence, legal, motion |
 

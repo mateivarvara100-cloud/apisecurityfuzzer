@@ -68,7 +68,15 @@ const target = demoTarget();
 /** The demo target. The server holds the real allowlist; this copy only explains refusals early. */
 export const DEMO_TARGET: string = target.origin;
 
-export const ALLOWLIST: { host: string; label: string }[] = [{ host: target.host, label: "VulnShop lab" }];
+/**
+ * The lab as the scan form shows it. Its address is the scan server's own (the lab runs inside
+ * it, on loopback), not the visitor's computer, so the form names it rather than showing the address.
+ */
+export const LAB = {
+  label: "VulnShop lab",
+  url: DEMO_TARGET,
+  specUrl: `${DEMO_TARGET}/openapi.json`,
+};
 
 /**
  * The limits preview mode pretends to have. In live mode the backend says what they are (GET /me);

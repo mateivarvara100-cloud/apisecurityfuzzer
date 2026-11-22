@@ -153,3 +153,19 @@ def test_a_lab_that_never_comes_up_fails_before_any_scan_request():
     with pytest.raises(ScanFailed) as caught:
         scan_target(target, "http://127.0.0.1:9/openapi.json", ["bola"], Config(supabase_url="https://p.supabase.co", wake_timeout=1))
     assert caught.value.requests_sent == 0 and "1 seconds" in str(caught.value)
+
+
+def test_a_users_api_on_an_internal_address_is_refused_before_anything_is_sent(lab_url):
+    # The lab is on 127.0.0.1. As a user's own API (guarded), it must not be reachable at all.
+    target = Target(**{**lab_target(lab_url).__dict__, "guarded": True})
+    with pytest.raises(ScanFailed) as caught:
+        scan_target(target, f"{lab_url}/openapi.json", ["bola"], CONFIG)
+    assert caught.value.requests_sent == 0
+    assert "not a public internet address" in str(caught.value)
+
+
+def test_a_users_api_is_not_scanned_through_a_proxy(lab_url, monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+    target = Target(**{**lab_target(lab_url).__dict__, "guarded": True})
+    with pytest.raises(ScanFailed, match="proxy"):
+        scan_target(target, f"{lab_url}/openapi.json", ["bola"], CONFIG)

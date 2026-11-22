@@ -6,7 +6,7 @@ give it two test accounts, and get a report a developer can act on: the endpoint
 the severity, and the fix.
 
 **Try it in the browser:** <https://apifuzz.vercel.app>. Sign in and scan VulnShop, a
-deliberately vulnerable demo API, with the same engine. The [sample report](https://apifuzz.vercel.app/sample)
+deliberately vulnerable demo API, or your own API once it is approved, with the same engine. The [sample report](https://apifuzz.vercel.app/sample)
 needs no account. See [Hosted demo](#hosted-demo).
 
 > **Status.** Five checks work today: `bola` (BOLA/IDOR by token swapping), `auth-required`,
@@ -90,7 +90,9 @@ apifuzz scan openapi.json --i-have-authorization --base-url https://staging.exam
 `scan` refuses to run without `--i-have-authorization`. It contacts only the base URL's host,
 plus any `--allow host[:port]` entries, and never follows redirects. A spec given as a URL is
 downloaded under the same rules: only from the host you typed, and a redirect is an error that
-names where it points.
+names where it points. A `$ref` may only point inside the spec (`#/components/...`): one that names
+another file or URL is refused before anything is fetched or read, so a spec can't send apifuzz
+anywhere else. Bundle a multi-file spec into one document first.
 
 **The target.** Pass `--base-url` or set `APIFUZZ_BASE_URL`. Without either, the spec's `servers`
 entry is used only if the spec was downloaded from that same host, or you listed the host with
@@ -383,9 +385,13 @@ They exist only in the lab, so it's fine to put them in `.env`.
 the same findings, evidence and fixes as the CLI. Reports are kept for 30 days and only their
 owner (or an admin) can open them. The [sample report](https://apifuzz.vercel.app/sample) is public.
 
-The demo scans the lab and nothing else. To scan your own API, use the CLI
-([Scan your own API](#scan-your-own-api)). Limits: 5 scans per account per day, 50 for the whole
-server, one scan at a time, at most 400 requests per scan.
+**Your own API.** Add it on the Your APIs page (HTTPS, public address, spec on the same address).
+An admin approves each one by hand; then it appears in the scan form, where you paste bearer tokens
+of two test accounts for that scan. The tokens are never stored. Without approval, use the CLI
+([Scan your own API](#scan-your-own-api)).
+
+Limits: 5 scans per account per day, 50 for the whole server, one scan at a time, at most 400
+requests per scan; up to 3 own APIs per account, each scanned at most 3 times a day.
 
 ```mermaid
 flowchart LR
@@ -413,9 +419,12 @@ How it is kept safe:
 - **Accounts.** Sign-up and password reset give the same answer whether or not an address has an
   account. An account created with Google can never get a password (a database rule). The e-mail
   forms carry a Cloudflare Turnstile bot check that Supabase verifies.
-- **Scanning.** Only server-configured targets: the target's host is the engine's whole
-  allowlist, the spec download never follows a redirect, and the server's own environment never
-  reaches the engine. Test-account tokens are removed from every report.
+- **Scanning.** Only the lab and approved APIs: the target's host is the engine's whole allowlist,
+  the spec download never follows a redirect, a spec can't refer to other documents, and the
+  server's own environment never reaches the engine. For a user's API every connection is checked
+  at connect time and pinned to a public address (no private, loopback, metadata or similar
+  addresses, even if the name's DNS answer changes mid-scan), and answers are capped at 5 MB.
+  Test-account tokens are never stored and are removed from every report.
 - **The API.** Rate limits per address and per account, a 16 KB body cap, strict CORS (only the
   site), security headers, and validation errors that never echo the input. The `scans` table
   has row-level security with no policies, so browsers can't read it at all.
@@ -512,13 +521,11 @@ and uploads. The published version is the one in `pyproject.toml`, not the git t
 
 ## What's next
 
-The hosted demo (Phase 4) is live. Next, roughly in this order:
+The hosted demo (Phase 4) is live, including scans of your own API once an admin approves it.
+Next, roughly in this order:
 
-- **Scan your own API from the browser.** Targets approved by hand at first, then self-service
-  proof of ownership (a file under `/.well-known/` or a DNS record). Every user target gets a
-  network guard (HTTPS only, no private, loopback or cloud-metadata addresses, the resolved
-  address pinned for the whole scan), and two short-lived test tokens that are used for that scan
-  only and never stored.
+- **Self-service proof of ownership** (a file under `/.well-known/` or a DNS record), instead of
+  approval by hand.
 - **Scans in the background**, with live progress and a Cancel button, instead of one long request.
 - **Compare scans** of the same target: new, fixed and still-open findings.
 - **Upload a spec** instead of linking it, for APIs that don't publish theirs (without fetching

@@ -29,6 +29,9 @@ class Target:
     # Answers 200 with JSON once the target is up. Asked first, patiently, so a target that is
     # still starting (or asleep on free hosting) doesn't fail the scan. Empty: no such check.
     health_url: str = ""
+    # A user's own API: every connection goes through the public-address guard (netguard), and
+    # its answers are size-capped. False only for targets this server configures itself.
+    guarded: bool = False
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,8 @@ class Config:
     allowed_origins: tuple[str, ...] = ("http://127.0.0.1:5173", "http://localhost:5173")
     targets: tuple[Target, ...] = ()
     scans_per_day: int = 5  # per user, reset at midnight UTC; admins have no limit
+    targets_per_user: int = 3  # own APIs one account may have, pending, approved or rejected
+    scans_per_target_per_day: int = 3  # per own API, across all accounts, so no API gets hammered
     global_scans_per_day: int = 50  # across all users, so many accounts can't add up to a flood
     burst: int = 15  # requests the rate-limit check sends to one endpoint
     max_requests: int = 400  # a scan stops after this many requests
@@ -107,6 +112,8 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         allowed_origins=origins or Config.allowed_origins,
         targets=(_lab(env),),
         scans_per_day=_int(env, "SCANS_PER_DAY", 5, 1, 100),
+        targets_per_user=_int(env, "TARGETS_PER_USER", 3, 0, 20),
+        scans_per_target_per_day=_int(env, "SCANS_PER_TARGET_PER_DAY", 3, 1, 50),
         global_scans_per_day=_int(env, "GLOBAL_SCANS_PER_DAY", 50, 1, 10_000),
         burst=_int(env, "SCAN_BURST", 15, 2, 50),
         max_requests=_int(env, "SCAN_MAX_REQUESTS", 400, 10, 2000),

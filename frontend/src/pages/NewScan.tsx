@@ -1,9 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { CHECKS } from "../api/checks";
-import { ALLOWLIST, API_MODE, DEMO_TARGET } from "../api/config";
-import { precheck, ScanRefused, scans, type Limits } from "../api/service";
-import type { CheckId } from "../api/types";
+import { API_MODE, LAB } from "../api/config";
+import { precheck, ScanRefused, scans, targets as targetService, type Limits } from "../api/service";
+import type { CheckId, OwnTarget } from "../api/types";
 import { useSession } from "../auth/session";
 import { plural } from "../lib/format";
 import { Mark } from "../components/Mark";
@@ -12,13 +12,21 @@ import { FuzzText } from "../components/FuzzText";
 
 type Field = ScanRefused["field"];
 
+const LAB_ID = "lab";
+const host = (url: string) => url.replace(/^https?:\/\//, "");
+
 export function NewScan() {
   const { session } = useSession();
   const navigate = useNavigate();
-  const [target, setTarget] = useState(DEMO_TARGET);
-  const [specUrl, setSpecUrl] = useState(`${DEMO_TARGET}/openapi.json`);
-  const [specTouched, setSpecTouched] = useState(false);
-  const [checks, setChecks] = useState<CheckId[]>(CHECKS.map((c) => c.id));
+  const location = useLocation();
+  const [own, setOwn] = useState<OwnTarget[]>([]);
+  const [selected, setSelected] = useState<string>(() => (location.state as { target?: string } | null)?.target ?? LAB_ID);
+  // Every check but rate-limit is on until the user turns it off. Rate-limit (a burst of requests)
+  // defaults to on for the lab and off for someone's own API, unless the user has chosen.
+  const [picked, setPicked] = useState<CheckId[]>(CHECKS.map((c) => c.id).filter((id) => id !== "rate-limit"));
+  const [rateChoice, setRateChoice] = useState<boolean | null>(null);
+  const [tokenA, setTokenA] = useState("");
+  const [tokenB, setTokenB] = useState("");
   const [authorized, setAuthorized] = useState(false);
   const [error, setError] = useState<{ message: string; field?: Field } | null>(null);
   const [running, setRunning] = useState(false);
@@ -26,6 +34,15 @@ export function NewScan() {
   const [limits, setLimits] = useState<Limits | null>(null);
 
   const token = session?.accessToken ?? "";
+  const approved = useMemo(() => own.filter((t) => t.status === "approved"), [own]);
+  const waiting = own.filter((t) => t.status === "pending").length;
+  const chosen = approved.find((t) => t.id === selected) ?? null; // null: the lab
+  const isOwn = chosen !== null;
+  const rateOn = rateChoice ?? !isOwn;
+  const checks = useMemo(
+    () => CHECKS.map((c) => c.id).filter((id) => (id === "rate-limit" ? rateOn : picked.includes(id))),
+    [picked, rateOn],
+  );
 
   useEffect(() => {
     let current = true;
@@ -33,10 +50,19 @@ export function NewScan() {
       .limits(token)
       .then((l) => current && setLimits(l))
       .catch((err: Error) => current && setError({ message: err.message }));
+    targetService
+      .list(token)
+      .then((list) => current && setOwn(list.targets))
+      .catch(() => undefined); // the lab can still be scanned; the APIs page shows the problem
     return () => {
       current = false;
     };
   }, [token]);
+
+  // A target asked for (from the APIs page) that isn't approved, or doesn't exist: fall back to the lab.
+  useEffect(() => {
+    if (selected !== LAB_ID && own.length > 0 && !approved.some((t) => t.id === selected)) setSelected(LAB_ID);
+  }, [own, approved, selected]);
 
   useEffect(() => {
     if (!running) return;
@@ -45,22 +71,28 @@ export function NewScan() {
     return () => clearInterval(id);
   }, [running]);
 
-  function chooseTarget(value: string) {
-    setTarget(value);
-    // Keep the spec beside the target until the user types their own spec address.
-    if (!specTouched) setSpecUrl(`${value.replace(/\/+$/, "")}/openapi.json`);
-    if (error?.field === "target" || error?.field === "specUrl") setError(null);
+  function choose(id: string) {
+    setSelected(id);
+    if (error?.field === "target" || error?.field === "specUrl" || error?.field === "limit") setError(null);
   }
 
   function toggle(id: CheckId) {
-    setChecks((cur) => (cur.includes(id) ? cur.filter((c) => c !== id) : [...cur, id]));
+    if (id === "rate-limit") setRateChoice(!rateOn);
+    else setPicked((cur) => (cur.includes(id) ? cur.filter((c) => c !== id) : [...cur, id]));
     if (error?.field === "checks") setError(null);
   }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const req = { target: target.trim(), specUrl: specUrl.trim(), checks, authorized };
-    const refused = precheck(req);
+    const target = chosen ?? LAB;
+    const req = {
+      target: target.url,
+      specUrl: target.specUrl,
+      checks,
+      authorized,
+      ...(isOwn ? { tokenA: tokenA.trim() || undefined, tokenB: tokenB.trim() || undefined } : {}),
+    };
+    const refused = precheck(req, [LAB.url, ...approved.map((t) => t.url)]);
     if (refused) {
       setError({ message: refused.message, field: refused.field });
       return;
@@ -91,6 +123,7 @@ export function NewScan() {
   const describedBy = (field: Field, hint?: string) =>
     [hint, error?.field === field ? `${field}-error` : undefined].filter(Boolean).join(" ") || undefined;
   const noneLeft = limits?.left === 0;
+  const targetSpent = chosen?.scansLeftToday === 0;
 
   return (
     <>
@@ -103,66 +136,100 @@ export function NewScan() {
       </p>
 
       <form className="scan-form" onSubmit={submit} noValidate>
-        <div className="scan-form__row">
-          <label className="field__label" htmlFor="target">
+        <div className="scan-form__row" role="radiogroup" aria-labelledby="target-label" aria-describedby={describedBy("target")}>
+          <span className="field__label scan-form__group-label" id="target-label">
             Target
-          </label>
+          </span>
           <div className="field">
-            <input
-              id="target"
-              className="input input--mono"
-              value={target}
-              inputMode="url"
-              spellCheck={false}
-              onChange={(e) => chooseTarget(e.target.value)}
-              aria-invalid={invalid("target")}
-              aria-describedby={describedBy("target", "target-hint")}
-              disabled={running}
-            />
-            <div className="allowlist" id="target-hint">
-              <span className="field__hint">This server only scans:</span>
-              {ALLOWLIST.map((a) => (
-                <button
-                  key={a.host}
-                  type="button"
-                  className="allowlist__item"
-                  onClick={() => chooseTarget(`${new URL(DEMO_TARGET).protocol}//${a.host}`)}
+            <div className="targets">
+              <label className="targets__item">
+                <input
+                  type="radio"
+                  name="target"
+                  checked={!isOwn}
+                  onChange={() => choose(LAB_ID)}
                   disabled={running}
-                >
-                  {a.label} <code>{a.host}</code>
-                </button>
+                />
+                <span>
+                  <span className="targets__name">{LAB.label}</span>
+                  <span className="targets__detail">
+                    A deliberately vulnerable demo API that runs on the scan server itself, so nothing outside it is
+                    contacted.
+                  </span>
+                </span>
+              </label>
+              {approved.map((t) => (
+                <label className="targets__item" key={t.id}>
+                  <input
+                    type="radio"
+                    name="target"
+                    checked={selected === t.id}
+                    onChange={() => choose(t.id)}
+                    disabled={running}
+                  />
+                  <span>
+                    <span className="targets__name">{t.label}</span>
+                    <code className="targets__url">{host(t.url)}</code>
+                    <span className="targets__detail">
+                      Your API.{" "}
+                      {t.scansLeftToday === undefined
+                        ? ""
+                        : t.scansLeftToday === 0
+                          ? "Scanned as often as allowed today."
+                          : `${plural(t.scansLeftToday, "scan")} of it left today.`}
+                    </span>
+                  </span>
+                </label>
               ))}
             </div>
+            <p className="field__hint targets__add">
+              <Link to="/apis">{approved.length ? "Manage your APIs" : "Add your own API"}</Link>
+              {waiting > 0 && ` · ${plural(waiting, "API")} waiting for approval`}
+            </p>
             {errorFor("target")}
-          </div>
-        </div>
-
-        <div className="scan-form__row">
-          <label className="field__label" htmlFor="spec">
-            OpenAPI spec
-          </label>
-          <div className="field">
-            <input
-              id="spec"
-              className="input input--mono"
-              value={specUrl}
-              inputMode="url"
-              spellCheck={false}
-              onChange={(e) => {
-                setSpecUrl(e.target.value);
-                setSpecTouched(true);
-                if (error?.field === "specUrl") setError(null);
-              }}
-              aria-invalid={invalid("specUrl")}
-              aria-describedby={describedBy("specUrl", "spec-hint")}
-              disabled={running}
-            />
-            <span className="field__hint" id="spec-hint">
-              The server downloads the spec itself, so it has to be on an allowed host too.
-            </span>
             {errorFor("specUrl")}
           </div>
         </div>
+
+        {isOwn && (
+          <div className="scan-form__row">
+            <span className="field__label scan-form__group-label">Test accounts</span>
+            <div className="field tokens">
+              <p className="field__hint tokens__intro" id="tokens-hint">
+                Bearer tokens of two different test accounts on your API, so apifuzz can check whether one can read the
+                other's data. They're used for this scan only and never saved. Never use an admin's or a real user's
+                token. Without them the account checks (BOLA, mass assignment) have nothing to test.
+              </p>
+              {(["A", "B"] as const).map((who) => {
+                const field = who === "A" ? "tokenA" : "tokenB";
+                const value = who === "A" ? tokenA : tokenB;
+                return (
+                  <div className="field" key={who}>
+                    <label className="field__label" htmlFor={field}>
+                      Account {who} token
+                    </label>
+                    <input
+                      id={field}
+                      className="input input--mono"
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={value}
+                      onChange={(e) => {
+                        (who === "A" ? setTokenA : setTokenB)(e.target.value);
+                        if (error?.field === field) setError(null);
+                      }}
+                      aria-invalid={invalid(field)}
+                      aria-describedby={describedBy(field, "tokens-hint")}
+                      disabled={running}
+                    />
+                    {errorFor(field)}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="scan-form__row" role="group" aria-labelledby="checks-label" aria-describedby={describedBy("checks")}>
           <span className="field__label scan-form__group-label" id="checks-label">
@@ -186,6 +253,12 @@ export function NewScan() {
                 </label>
               ))}
             </div>
+            {isOwn && (
+              <span className="field__hint">
+                The rate-limit check sends a burst of up to {limits?.burst ?? 15} requests, so it starts switched off for
+                your own API.
+              </span>
+            )}
             {errorFor("checks")}
           </div>
         </div>
@@ -218,12 +291,12 @@ export function NewScan() {
             <div className="running">
               <p className="running__status" role="status">
                 <Mark className="running__mark" />
-                Scanning {target.replace(/^https?:\/\//, "")}, {plural(elapsed, "second")} so far
+                Scanning {chosen?.label ?? LAB.label}, {plural(elapsed, "second")} so far
               </p>
               {API_MODE === "mock" && <RequestTicker checks={checks} />}
             </div>
           ) : (
-            <button className="button" type="submit" disabled={noneLeft}>
+            <button className="button" type="submit" disabled={noneLeft || targetSpent}>
               Start scan
             </button>
           )}

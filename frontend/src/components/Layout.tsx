@@ -40,6 +40,9 @@ export function Layout() {
                 <NavLink to="/scans" className="nav__link">
                   History
                 </NavLink>
+                <NavLink to="/apis" className="nav__link">
+                  Your APIs
+                </NavLink>
               </>
             )}
             <NavLink to="/sample" className="nav__link">

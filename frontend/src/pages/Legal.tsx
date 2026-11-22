@@ -5,7 +5,7 @@
 import { Link } from "react-router-dom";
 import { CONTACT_EMAIL, OPERATOR_NAME, REPOSITORY_URL } from "../api/config";
 
-export const LEGAL_UPDATED = "21 November 2026";
+export const LEGAL_UPDATED = "22 November 2026";
 
 function Contact() {
   return CONTACT_EMAIL ? (
@@ -41,19 +41,36 @@ export function Terms() {
 
       <h2>Scan only what you're allowed to scan</h2>
       <p>
-        A scan sends real requests to the target. You may only scan the targets this site offers, which today is the
-        VulnShop lab, a deliberately vulnerable demo API run for this purpose. If the site later lets you add your own
-        API, you may only add one you own or have written permission to test, and the site will ask you to prove
-        control of it first.
+        A scan sends real requests to the target. You can scan the VulnShop lab, a deliberately vulnerable demo API run
+        for this purpose, and your own APIs once they are approved.
       </p>
       <p>
-        Ticking "I own this target or have written permission to test it" is your confirmation of that. You are
+        You may only add an API that you own or have written permission to test. Ticking "I own this API or have written
+        permission to test it", and the same box when you start a scan, is your confirmation of that. You are
         responsible for the scans you start. Testing systems without permission is illegal in most countries.
       </p>
+      <h3>Your own APIs</h3>
+      <ul>
+        <li>
+          Each API you add is checked by hand before it can be scanned. An approval can be refused or withdrawn at any
+          time, without giving a reason, and approving an API doesn't mean anyone has checked that you may test it.
+        </li>
+        <li>
+          A scan sends probes meant to find flaws: marker values in parameters, requests with one test account's token
+          for the other's data, changes to test data (put back afterwards where possible), and, if you choose it, a short
+          burst of requests. Scan a staging copy, not production, and tell whoever runs the API first: the requests may
+          set off its alarms. They carry the header <code>User-Agent: apifuzz/…</code>.
+        </li>
+        <li>
+          Use only test accounts' tokens, never an admin's or a real user's. Tokens are used for that one scan and never
+          stored.
+        </li>
+        <li>Only addresses on the public internet can be scanned, over HTTPS, a limited number of times a day.</li>
+      </ul>
 
       <h2>Don't misuse the service</h2>
       <ul>
-        <li>Don't try to get around the scan limits, the allowlist, or the sign-in.</li>
+        <li>Don't try to get around the scan limits, the approval of APIs, the address checks, or the sign-in.</li>
         <li>Don't attack this site, its servers or the services it relies on, or use it to reach anyone else's.</li>
         <li>Don't create accounts in bulk or share your account.</li>
         <li>
@@ -137,7 +154,15 @@ export function Privacy() {
               <td>Until you ask for your account to be deleted</td>
             </tr>
             <tr>
-              <td>Your scans: target, checks chosen, the report, when it ran</td>
+              <td>The APIs you add: their name, address and spec address, whether they were approved, and any note</td>
+              <td>To let you scan them, and so an admin can decide whether they may be scanned (needed to provide the service)</td>
+              <td>Until you remove the API or your account is deleted</td>
+            </tr>
+            <tr>
+              <td>
+                Your scans: target, checks chosen, the report, when it ran. A report of your own API contains what it
+                answered, with sign-in data and fields such as e-mail addresses masked
+              </td>
               <td>To show you your reports and enforce the daily limits (needed to provide the service)</td>
               <td>30 days, then deleted automatically</td>
             </tr>
@@ -149,11 +174,18 @@ export function Privacy() {
           </tbody>
         </table>
       </div>
+      <p>
+        The test-account tokens you enter to scan your own API are used for that scan only. They are not stored, not
+        logged, and are removed from the report.
+      </p>
       <p>Your data is not sold, not used for advertising, and not shared except with the providers below.</p>
 
       <h2>Who processes it</h2>
       <ul>
-        <li>Supabase: accounts, sign-in, sign-in and password-reset e-mails, and the scan history (hosted in the EU).</li>
+        <li>
+          Supabase: accounts, sign-in, sign-in and password-reset e-mails, the scan history and the list of your APIs
+          (hosted in the EU).
+        </li>
         <li>Render: runs the scan server.</li>
         <li>Vercel: serves this website.</li>
         <li>

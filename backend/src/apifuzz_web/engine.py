@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from apifuzz import __version__ as engine_version
 from apifuzz.checks import ScanContext, all_checks, select_checks
 from apifuzz.endpoint_model import build_endpoints
 from apifuzz.errors import ApifuzzError
@@ -29,6 +30,7 @@ from apifuzz.settings import host_entry, resolve_settings
 from apifuzz.spec_loader import load_spec
 
 from apifuzz_web.config import Config, Target
+from apifuzz_web.netguard import GuardedTransport, proxy_configured
 
 CHECK_IDS = tuple(c.id for c in all_checks())
 
@@ -88,10 +90,23 @@ def wake(
 def scan_target(target: Target, spec_url: str, checks: list[str], config: Config) -> ScanOutcome:
     if target.health_url:
         wake(target.health_url, config.wake_timeout)
+    transport: httpx.BaseTransport | None = None
+    spec_client: httpx.Client | None = None
+    if target.guarded:
+        # A user's API: every connection is checked and pinned to a public address (netguard).
+        if proxy_configured():
+            raise ScanFailed("this server has an HTTP proxy configured, so it can't scan outside APIs safely.")
+        transport = GuardedTransport()
+        spec_client = httpx.Client(transport=GuardedTransport(), timeout=15.0, follow_redirects=False,
+                                   trust_env=False, headers={"User-Agent": f"apifuzz/{engine_version}"})
     allowlist = Allowlist([host_entry(target.base_url)])
     client: HttpClient | None = None
     try:
-        document = load_spec(spec_url, follow_redirects=False, allowlist=allowlist)
+        try:
+            document = load_spec(spec_url, client=spec_client, follow_redirects=False, allowlist=allowlist)
+        finally:
+            if spec_client is not None:
+                spec_client.close()
         settings = resolve_settings(
             spec=document,
             base_url=target.base_url,
@@ -104,7 +119,8 @@ def scan_target(target: Target, spec_url: str, checks: list[str], config: Config
         endpoints = build_endpoints(document)
         chosen = select_checks(only=in_engine_order(checks))
         notes: list[str] = []
-        with HttpClient(allowlist, timeout=config.request_timeout, max_requests=config.max_requests) as client:
+        with HttpClient(allowlist, timeout=config.request_timeout, max_requests=config.max_requests,
+                        transport=transport) as client:
             settings = authenticate(client, settings)
             notes += [f"warning: {line}" for line in preflight(client, settings, endpoints)]
             reauth = Reauthenticator(client, settings, endpoints)

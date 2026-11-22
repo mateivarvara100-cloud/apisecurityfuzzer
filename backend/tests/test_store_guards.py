@@ -8,7 +8,7 @@ import pytest
 
 from apifuzz_web.config import ConfigError, load_config
 from apifuzz_web.guards import RateLimiter, client_ip
-from apifuzz_web.store import ScanRow, StoreError, SupabaseStore
+from apifuzz_web.store import ScanRow, StoreError, SupabaseStore, TargetRow
 
 SECRET = "sb_secret_test"
 
@@ -74,6 +74,35 @@ def test_a_count_without_a_total_is_an_error():
     _, store = fake_postgrest(lambda r: httpx.Response(200))
     with pytest.raises(StoreError):
         store.count_since(datetime(2026, 11, 21, tzinfo=timezone.utc))
+
+
+def test_a_count_can_be_for_one_target():
+    seen, store = fake_postgrest(lambda r: httpx.Response(200, headers={"Content-Range": "*/2"}))
+    assert store.count_since(datetime(2026, 11, 21, tzinfo=timezone.utc), target="https://api.example.com") == 2
+    assert seen[0].url.params["target"] == "eq.https://api.example.com" and "user_id" not in seen[0].url.params
+
+
+TARGET = dict(user_id="u1", user_email="a@example.test", label="Orders", base_url="https://api.example.com",
+              spec_url="https://api.example.com/openapi.json", created_at="2026-11-21T15:00:00+00:00")
+
+
+def test_targets_are_added_and_listed_for_their_owner_only():
+    seen, store = fake_postgrest(lambda r: httpx.Response(201) if r.method == "POST"
+                                 else httpx.Response(200, json=[{**TARGET, "id": "t1", "status": "approved",
+                                                                 "note": None}]))
+    store.add_target(TargetRow(**TARGET))
+    assert seen[0].url.path == "/rest/v1/targets" and json.loads(seen[0].content)["status"] == "pending"
+    (listed,) = store.list_targets("u1")
+    assert listed.status == "approved" and seen[1].url.params["user_id"] == "eq.u1"
+
+
+def test_a_delete_names_the_owner_so_someone_elses_target_is_never_touched():
+    seen, store = fake_postgrest(lambda r: httpx.Response(200, json=[]))
+    target_id = "4f7c2a8e-1b3d-4c5e-9f6a-7b8c9d0e1f2a"
+    assert store.delete_target(target_id, "u2") is False  # nothing of u2's had that id
+    params = seen[0].url.params
+    assert seen[0].method == "DELETE" and params["id"] == f"eq.{target_id}" and params["user_id"] == "eq.u2"
+    assert store.delete_target("1 or 1=1", "u2") is False and len(seen) == 1  # never sent
 
 
 # ---- rate limiter ---------------------------------------------------------------------------

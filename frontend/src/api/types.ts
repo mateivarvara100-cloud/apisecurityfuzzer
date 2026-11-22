@@ -79,4 +79,35 @@ export interface ScanRequest {
   specUrl: string;
   checks: CheckId[];
   authorized: boolean;
+  // Bearer tokens of two test accounts, only for the user's own API. Sent for this scan only;
+  // the server never stores them.
+  tokenA?: string;
+  tokenB?: string;
+}
+
+/** A user's own API. An admin approves or rejects it by hand; only approved ones can be scanned. */
+export type TargetStatus = "pending" | "approved" | "rejected";
+
+export interface OwnTarget {
+  id: string;
+  label: string;
+  url: string; // https origin
+  specUrl: string;
+  status: TargetStatus;
+  note: string | null; // the admin's note, usually with a rejection
+  createdAt: string;
+  scansLeftToday?: number; // approved ones only
+}
+
+export interface TargetList {
+  targets: OwnTarget[];
+  maxTargets: number;
+  scansPerTargetPerDay: number;
+}
+
+export interface NewTarget {
+  label: string;
+  url: string;
+  specUrl: string;
+  authorized: boolean;
 }
