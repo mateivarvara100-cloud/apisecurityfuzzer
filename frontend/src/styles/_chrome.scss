@@ -132,6 +132,7 @@
 
 .nav {
   display: flex;
+  flex-wrap: wrap; // five links don't fit one row on a phone; the last one was cut off
   gap: 4px;
   flex: 1;
 
