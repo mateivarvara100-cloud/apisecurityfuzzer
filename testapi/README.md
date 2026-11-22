@@ -49,6 +49,11 @@ The rate-limit check is off by default for your own API in the scan form: tick i
 4. `https://<project>.vercel.app/.well-known/apifuzz-verify.txt` now shows the line. Press
    **Check now**.
 
+`vercel.json` sends every request to the function with `routes`, not `rewrites`: with rewrites,
+Vercel serves `openapi.json` from the folder as a static file first, so the private variant
+couldn't hide it. Use the project's own `https://<project>.vercel.app` address; the longer
+`...-<team>.vercel.app` ones are behind Vercel's login.
+
 ## Run it locally
 
 ```

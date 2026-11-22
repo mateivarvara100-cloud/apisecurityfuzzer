@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": { "api/index.py": { "includeFiles": "openapi.json" } },
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]
+  "regions": ["fra1"],
+  "routes": [{ "src": "/(.*)", "dest": "/api/index" }]
 }
