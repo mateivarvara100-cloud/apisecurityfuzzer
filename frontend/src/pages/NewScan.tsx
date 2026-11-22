@@ -292,7 +292,7 @@ export function NewScan() {
             <span className="scan-form__limits">
               {noneLeft
                 ? "You've used all of today's scans. The count resets at midnight UTC."
-                : `${limits.left === null ? "No daily limit on this account." : `${plural(limits.left, "scan")} left today.`} Rate-limit bursts are capped at ${limits.burst} requests.`}
+                : `${limits.left === null ? "" : `${plural(limits.left, "scan")} left today. `}Rate-limit bursts are capped at ${limits.burst} requests.`}
             </span>
           )}
         </div>

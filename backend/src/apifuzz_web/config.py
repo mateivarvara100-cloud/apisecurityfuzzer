@@ -44,7 +44,7 @@ class Config:
     supabase_secret_key: str | None = field(default=None, repr=False)
     allowed_origins: tuple[str, ...] = ("http://127.0.0.1:5173", "http://localhost:5173")
     targets: tuple[Target, ...] = ()
-    scans_per_day: int = 5  # per user, reset at midnight UTC; admins have no limit
+    scans_per_day: int = 5  # per account, reset at midnight UTC
     targets_per_user: int = 3  # own APIs one account may have, pending, approved or rejected
     scans_per_target_per_day: int = 3  # per own API, across all accounts, so no API gets hammered
     global_scans_per_day: int = 50  # across all users, so many accounts can't add up to a flood

@@ -40,12 +40,10 @@ def test_the_secret_key_goes_in_apikey_only():
     assert json.loads(request.content)["user_id"] == "u1"
 
 
-def test_list_filters_by_owner_unless_admin():
+def test_a_list_is_always_one_owners():
     seen, store = fake_postgrest(lambda r: httpx.Response(200, json=[]))
     store.list("u1")
-    store.list(None)
     assert seen[0].url.params["user_id"] == "eq.u1" and seen[0].url.params["status"] == "eq.done"
-    assert "user_id" not in seen[1].url.params
 
 
 def test_count_reads_the_total_postgrest_reports():

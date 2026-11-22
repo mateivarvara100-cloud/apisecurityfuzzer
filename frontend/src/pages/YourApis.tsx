@@ -233,7 +233,7 @@ function ApiItem({ t, token, onChanged }: { t: OwnTarget; token: string; onChang
             </>
           )}
         </span>
-        {t.note && <span className="api-list__note">Note from the admin: {t.note}</span>}
+        {t.note && <span className="api-list__note">Note from the site's operator: {t.note}</span>}
       </div>
       <Status t={t} />
       <div className="api-list__actions">

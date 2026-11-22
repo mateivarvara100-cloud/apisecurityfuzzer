@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from apifuzz_web.app import _in_background
 from apifuzz_web.engine import ScanFailed
-from conftest import ADMIN, ALICE, LAB, auth, finished, scan_body, start, wait_for
+from conftest import ALICE, LAB, auth, finished, scan_body, start, wait_for
 
 _wait_for = wait_for
 
@@ -41,15 +41,10 @@ def test_no_interactive_docs(client):
 
 def test_me_for_a_user(client):
     me = client.get("/me", headers=auth("alice")).json()
-    assert me["email"] == ALICE.email and me["isAdmin"] is False
+    assert me["email"] == ALICE.email and "isAdmin" not in me
     assert me["scansPerDay"] == 5 and me["scansLeftToday"] == 5
     assert me["resetsAt"] == "2026-11-22T00:00:00+00:00"
     assert me["targets"] == [{"id": "lab", "label": "VulnShop lab", "url": LAB, "specUrl": f"{LAB}/openapi.json"}]
-
-
-def test_me_for_an_admin_has_no_limit(client):
-    me = client.get("/me", headers=auth("admin")).json()
-    assert me["isAdmin"] is True and me["scansPerDay"] is None and me["scansLeftToday"] is None
 
 
 # ---- refusals -------------------------------------------------------------------------------
@@ -131,7 +126,7 @@ def test_a_scan_runs_and_is_stored(client, runner):
     assert runner.calls == [(LAB, f"{LAB}/openapi.json", ["bola", "injection"])]
     assert record["checks"] == ["bola", "injection"] and record["target"] == LAB
     assert record["createdAt"] == "2026-11-21T15:00:00+00:00"
-    assert "ownerEmail" not in record  # only an admin sees whose scan it is
+    assert "ownerEmail" not in record
     assert client.get(f"/scans/{record['id']}", headers=auth("alice")).json() == record
     assert [s["id"] for s in client.get("/scans", headers=auth("alice")).json()] == [record["id"]]
 
@@ -163,12 +158,6 @@ def test_the_daily_limit_per_user(client, runner, clock):
     assert client.post("/scans", json=scan_body(), headers=auth("bob")).status_code == 202
     clock[0] += timedelta(days=1)
     assert client.post("/scans", json=scan_body(), headers=auth("alice")).status_code == 202
-
-
-def test_an_admin_has_no_daily_limit(make_client, runner):
-    client = make_client(scans_per_day=1, global_scans_per_day=1, requests_per_minute_user=100)
-    for _ in range(4):
-        assert client.post("/scans", json=scan_body(), headers=auth("admin")).status_code == 202
 
 
 def test_the_daily_limit_for_the_whole_server(make_client):
@@ -234,14 +223,12 @@ def test_odd_ids_are_just_missing(client):
         assert client.get(f"/scans/{scan_id}", headers=auth("alice")).status_code == 404
 
 
-def test_an_admin_sees_every_scan_and_whose_it_is(client):
+def test_every_account_sees_only_its_own_scans(client):
     a = client.post("/scans", json=scan_body(), headers=auth("alice")).json()
     b = client.post("/scans", json=scan_body(), headers=auth("bob")).json()
-    listed = client.get("/scans", headers=auth("admin")).json()
-    assert {s["id"] for s in listed} == {a["id"], b["id"]}
-    assert {s["ownerEmail"] for s in listed} == {"a@example.test", "b@example.test"}
-    assert client.get(f"/scans/{a['id']}", headers=auth("admin")).json()["ownerEmail"] == "a@example.test"
-    assert ADMIN.is_admin
+    assert [s["id"] for s in client.get("/scans", headers=auth("alice")).json()] == [a["id"]]
+    assert [s["id"] for s in client.get("/scans", headers=auth("bob")).json()] == [b["id"]]
+    assert "ownerEmail" not in client.get(f"/scans/{a['id']}", headers=auth("alice")).json()
 
 
 # ---- the HTTP layer -------------------------------------------------------------------------

@@ -46,17 +46,16 @@ verifier = TokenVerifier(URL, keys=Keys())
 def test_a_good_token():
     user = verifier.verify(token())
     assert user.id == "11111111-1111-4111-8111-111111111111"
-    assert user.email == "a@example.test" and user.is_admin is False
+    assert user.email == "a@example.test"
 
 
-def test_admin_comes_from_app_metadata():
-    assert verifier.verify(token(app_metadata={"role": "admin"})).is_admin is True
-
-
-def test_admin_in_user_metadata_is_ignored():
-    # Any user can write their own user_metadata, so it must never grant anything.
-    assert verifier.verify(token(user_metadata={"role": "admin"}, app_metadata={})).is_admin is False
-    assert verifier.verify(token(app_metadata="admin")).is_admin is False
+def test_a_role_in_the_token_grants_nothing():
+    # There are no roles. An admin role left in app_metadata (it existed until Nov 22, 2026), or
+    # one a user wrote into their own user_metadata, gives the same account as any other.
+    plain = verifier.verify(token())
+    assert verifier.verify(token(app_metadata={"role": "admin"})) == plain
+    assert verifier.verify(token(user_metadata={"role": "admin"}, app_metadata={})) == plain
+    assert not hasattr(plain, "is_admin")
 
 
 @pytest.mark.parametrize(

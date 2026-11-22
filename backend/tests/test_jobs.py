@@ -108,9 +108,8 @@ def test_someone_elses_running_scan_looks_missing(make_client, runner):
         for path in (f"/scans/{job['id']}", f"/scans/{job['id']}/progress"):
             assert client.get(path, headers=auth("bob")).status_code == 404
         assert client.post(f"/scans/{job['id']}/cancel", headers=auth("bob")).status_code == 404
-        # An admin may watch and stop anyone's.
-        assert client.get(f"/scans/{job['id']}/progress", headers=auth("admin")).json()["status"] == "running"
-        assert client.post(f"/scans/{job['id']}/cancel", headers=auth("admin")).status_code == 202
+        # ...and it is still running: bob's cancel did nothing.
+        assert client.get(f"/scans/{job['id']}/progress", headers=auth("alice")).json()["cancelRequested"] is False
     finally:
         runner.block.set()
     assert wait_for(client, job["id"], "done")

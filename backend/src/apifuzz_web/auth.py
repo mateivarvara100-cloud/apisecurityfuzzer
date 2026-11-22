@@ -4,9 +4,9 @@ Supabase signs its tokens with an asymmetric key (ES256 for this project) and pu
 half at /auth/v1/.well-known/jwks.json, so the server needs no secret to check them. A token is
 accepted only if its signature, expiry, issuer and audience all check out.
 
-The role comes from `app_metadata.role`, which only the project owner can set (dashboard or SQL).
-`user_metadata` is deliberately ignored: any user can write to it, so a role there would let
-anyone make themselves an admin.
+Every account is the same: there are no roles. (An admin role existed until Nov 22, 2026; it was
+removed because the Supabase dashboard already does the operator's job. A `role` left in a
+token's app_metadata is ignored.)
 """
 
 from dataclasses import dataclass
@@ -27,7 +27,6 @@ class AuthUnavailable(Exception):
 class User:
     id: str  # Supabase's user id (the token's `sub`)
     email: str
-    is_admin: bool
 
 
 class KeySource(Protocol):
@@ -75,6 +74,4 @@ class TokenVerifier:
         sub, email = claims.get("sub"), claims.get("email")
         if not isinstance(sub, str) or not sub or not isinstance(email, str) or not email:
             raise AuthError("the sign-in token has no user")
-        app_metadata = claims.get("app_metadata")
-        is_admin = isinstance(app_metadata, dict) and app_metadata.get("role") == "admin"
-        return User(id=sub, email=email, is_admin=is_admin)
+        return User(id=sub, email=email)

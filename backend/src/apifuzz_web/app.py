@@ -8,7 +8,7 @@
     POST   /targets/{id}/verify  look for the proof file on the API; approve it if it's there
     DELETE /targets/{id}         remove one of your APIs
     POST   /scans                start a scan in the background; answers at once with its job
-    GET    /scans                your scans, newest first (an admin sees everyone's)
+    GET    /scans                your scans, newest first
     GET    /scans/{id}           one scan: the report once done, else how it's going
     GET    /scans/{id}/progress  how a running scan is going (polled; its own rate limit)
     POST   /scans/{id}/cancel    stop a running scan; what it found so far is kept
@@ -234,20 +234,15 @@ def create_app(
         if wait is not None:
             raise HTTPException(429, message, headers={"Retry-After": str(max(1, round(wait)))})
 
-    def scans_left(user: User, now: datetime) -> int | None:
-        if user.is_admin:
-            return None
+    def scans_left(user: User, now: datetime) -> int:
         used = store.count_since(_midnight_utc(now), user.id)
         return max(0, config.scans_per_day - used)
 
-    def as_record(row: ScanRow, viewer: User) -> dict[str, Any]:
-        record: dict[str, Any] = {
+    def as_record(row: ScanRow) -> dict[str, Any]:
+        return {
             "id": row.id, "status": "done", "target": row.target, "specUrl": row.spec_url, "checks": row.checks,
             "createdAt": row.created_at, "report": row.report,
         }
-        if viewer.is_admin:
-            record["ownerEmail"] = row.user_email
-        return record
 
     def target_record(row: TargetRow, now: datetime) -> dict[str, Any]:
         record: dict[str, Any] = {
@@ -256,7 +251,7 @@ def create_app(
             "verifiedAt": row.verified_at,
         }
         # How to prove control: while it waits, and for as long as a proven API is kept (the
-        # proof is checked again before each scan). Not for one an admin decided on by hand.
+        # proof is checked again before each scan). Not for one the operator decided on by hand.
         if row.status == "pending" or row.verified_at:
             record["proof"] = {"url": proof_url(row.base_url), "line": proof_line(row.verify_token)}
         if row.status == "approved":
@@ -410,8 +405,7 @@ def create_app(
         running = jobs.running_for(user.id)
         return {
             "email": user.email,
-            "isAdmin": user.is_admin,
-            "scansPerDay": None if user.is_admin else config.scans_per_day,
+            "scansPerDay": config.scans_per_day,
             "scansLeftToday": scans_left(user, now),
             "resetsAt": (_midnight_utc(now) + timedelta(days=1)).isoformat(),
             "burst": config.burst,
@@ -435,17 +429,16 @@ def create_app(
         try:
             # Counted while holding the lock, so two requests at once can't both take the last scan.
             now = clock()
-            if not user.is_admin:
-                if store.count_since(_midnight_utc(now), user.id) >= config.scans_per_day:
-                    raise Refused(429, f"You've used all {config.scans_per_day} scans for today. "
-                                       "The count resets at midnight UTC.", "limit")
-                if store.count_since(_midnight_utc(now)) >= config.global_scans_per_day:
-                    raise Refused(429, "This server has run all the scans it allows today. "
-                                       "Try again after midnight UTC.", "limit")
-                if target.guarded and (store.count_since(_midnight_utc(now), target=target.base_url)
-                                       >= config.scans_per_target_per_day):
-                    raise Refused(429, f"{target.label} has been scanned {config.scans_per_target_per_day} times "
-                                       "today, the most one API may be. Try again after midnight UTC.", "limit")
+            if store.count_since(_midnight_utc(now), user.id) >= config.scans_per_day:
+                raise Refused(429, f"You've used all {config.scans_per_day} scans for today. "
+                                   "The count resets at midnight UTC.", "limit")
+            if store.count_since(_midnight_utc(now)) >= config.global_scans_per_day:
+                raise Refused(429, "This server has run all the scans it allows today. "
+                                   "Try again after midnight UTC.", "limit")
+            if target.guarded and (store.count_since(_midnight_utc(now), target=target.base_url)
+                                   >= config.scans_per_target_per_day):
+                raise Refused(429, f"{target.label} has been scanned {config.scans_per_target_per_day} times "
+                                   "today, the most one API may be. Try again after midnight UTC.", "limit")
             spec_source = target.spec_url if target.spec_text is None else f"uploaded: {target.spec_name}"
             created = now.isoformat(timespec="seconds")
             job = Job(id=str(uuid.uuid4()), user_id=user.id, label=target.label, target=target.base_url,
@@ -463,12 +456,11 @@ def create_app(
 
     @app.get("/scans")
     def list_scans(user: User = Depends(current_user)) -> list[dict[str, Any]]:
-        rows = store.list(None if user.is_admin else user.id)
-        return [as_record(r, user) for r in rows]
+        return [as_record(r) for r in store.list(user.id)]
 
     def visible_job(scan_id: str, user: User) -> Job | None:
         job = jobs.get(scan_id) if is_uuid(scan_id) else None
-        return job if job is not None and (job.user_id == user.id or user.is_admin) else None
+        return job if job is not None and job.user_id == user.id else None
 
     @app.get("/scans/{scan_id}")
     def get_scan(scan_id: str, user: User = Depends(current_user)) -> dict[str, Any]:
@@ -477,9 +469,9 @@ def create_app(
             return job.view()
         row = store.get(scan_id) if is_uuid(scan_id) else None
         # Someone else's scan looks exactly like a missing one, so ids can't be probed.
-        if row is None or row.status != "done" or (row.user_id != user.id and not user.is_admin):
+        if row is None or row.status != "done" or row.user_id != user.id:
             raise HTTPException(404, "No such scan.")
-        return as_record(row, user)
+        return as_record(row)
 
     @app.get("/scans/{scan_id}/progress")
     def scan_progress(scan_id: str, user: User = Depends(watching_user)) -> dict[str, Any]:
@@ -487,7 +479,7 @@ def create_app(
         if job is not None:
             return job.view()
         row = store.get(scan_id) if is_uuid(scan_id) else None
-        if row is not None and row.status == "done" and (row.user_id == user.id or user.is_admin):
+        if row is not None and row.status == "done" and row.user_id == user.id:
             return {"id": row.id, "status": "done"}
         raise HTTPException(404, "No such scan. If it was running, the server may have restarted.")
 
@@ -525,7 +517,7 @@ def create_app(
         mine = store.list_targets(user.id)
         if any(t.base_url == base_url for t in mine):
             raise Refused(409, "You've already added that API.", "url")
-        if not user.is_admin and len(mine) >= config.targets_per_user:
+        if len(mine) >= config.targets_per_user:
             raise Refused(429, f"You can have {config.targets_per_user} APIs at most. Remove one to add another.",
                           "limit")
         if body.spec is not None:
@@ -560,7 +552,7 @@ def create_app(
         if row.status == "approved":
             return target_record(row, clock())
         if row.status == "rejected":
-            raise Refused(403, f"An admin decided {row.label} can't be scanned, so it can't be approved this way.")
+            raise Refused(403, f"{row.label} was refused by the site's operator, so it can't be approved this way.")
         per_user(verify_limiter, user, "Too many checks. Wait a few minutes, then check again.")
         try:
             proof_checker(row.base_url, row.verify_token)
@@ -568,7 +560,7 @@ def create_app(
             raise Refused(422, f"The proof wasn't found: {exc}.") from None
         when = clock().isoformat(timespec="seconds")
         if not store.mark_verified(row.id, user.id, when):
-            raise HTTPException(404, "No such API.")  # removed, or decided by an admin, meanwhile
+            raise HTTPException(404, "No such API.")  # removed, or decided by the operator, meanwhile
         row.status, row.verified_at = "approved", when
         log.info("target verified: %s by %s", row.base_url, user.id)
         return target_record(row, clock())

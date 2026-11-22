@@ -43,7 +43,7 @@ export class ScanRefused extends Error {
   }
 }
 
-/** `left` is null when the account has no daily limit (an admin). */
+/** `left` is null only when the server didn't say (every account has the same daily limit). */
 export interface Limits {
   left: number | null;
   burst: number;
@@ -61,7 +61,7 @@ export interface ScanService {
   limits(accessToken: string): Promise<Limits>;
 }
 
-/** The user's own APIs: added here, proven (or approved by an admin), then offered in the scan form. */
+/** The user's own APIs: added here, proven (or approved by the site's operator), then offered in the scan form. */
 export interface TargetService {
   list(accessToken: string): Promise<TargetList>;
   add(target: NewTarget, accessToken: string): Promise<OwnTarget>;

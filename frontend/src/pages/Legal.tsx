@@ -42,8 +42,8 @@ export function Terms() {
       <h2>Scan only what you're allowed to scan</h2>
       <p>
         A scan sends real requests to the target. You can scan the VulnShop lab, a deliberately vulnerable demo API run
-        for this purpose, and your own APIs once they are approved: when you've proven you control one, or an admin has
-        approved it.
+        for this purpose, and your own APIs once they are approved: when you've proven you control one, or the site's
+        operator has approved it.
       </p>
       <p>
         You may only add an API that you own or have written permission to test. Ticking "I own this API or have written
@@ -56,7 +56,7 @@ export function Terms() {
           Before an API can be scanned you prove that you control it, by publishing a file with a line this site gives you
           at <code>/.well-known/apifuzz-verify.txt</code> on it. The file is checked again before every scan: removing it
           withdraws your permission. Publishing the file shows control of the address, not permission to test it; that
-          is still your confirmation to give. An admin may also approve, refuse or withdraw an API at any time, without
+          is still your confirmation to give. The site's operator may also approve, refuse or withdraw an API at any time, without
           giving a reason.
         </li>
         <li>
@@ -164,7 +164,7 @@ export function Privacy() {
                 The APIs you add: their name, address, the spec address or the spec file you uploaded, the proof token and
                 when the proof was found, whether they were approved, and any note
               </td>
-              <td>To let you scan them, and so an admin can decide whether they may be scanned (needed to provide the service)</td>
+              <td>To let you scan them, and so the site's operator can decide whether they may be scanned (needed to provide the service)</td>
               <td>Until you change the spec, remove the API, or your account is deleted</td>
             </tr>
             <tr>

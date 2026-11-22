@@ -385,7 +385,7 @@ They exist only in the lab, so it's fine to put them in `.env`.
 the same findings, evidence and fixes as the CLI. A scan runs in the background: its page shows
 the phase it is in, how far the checks have got and the requests it is sending, with a Cancel
 button that stops it between two steps and keeps what it found so far. Reports are kept for 30
-days and only their owner (or an admin) can open them. Two scans of the same target can be
+days and only their owner can open them. Two scans of the same target can be
 compared: what is new, what was fixed, and what is still open (a finding that is missing only
 counts as fixed if the later scan tested that endpoint again). The
 [sample report](https://apifuzz.vercel.app/sample) is public.
@@ -394,7 +394,7 @@ counts as fixed if the later scan tested that endpoint again). The
 (on the same address) or uploaded as a file, for APIs that don't publish theirs. Then prove you
 control it: publish the line the page gives you at `https://<your API>/.well-known/apifuzz-verify.txt`
 and press Check now. The file is checked again before every scan, so taking it down withdraws the
-permission. An admin can still approve or reject an API by hand. In the scan form you paste
+permission. The site's operator can still approve or reject an API by hand, in Supabase. In the scan form you paste
 bearer tokens of two test accounts for that scan; they are never stored. Without a public
 address, use the CLI ([Scan your own API](#scan-your-own-api)).
 
@@ -425,13 +425,14 @@ flowchart LR
 How it is kept safe:
 
 - **Sign-in.** The backend verifies every Supabase token against the project's public keys
-  (ES256, audience, issuer). The admin role is read only from `app_metadata`, which users can't
-  change. Google sign-in uses apifuzz's own button: Google returns a one-time code, the backend
-  exchanges it with the client secret, and Google's screen shows apifuzz, not Supabase.
+  (ES256, audience, issuer). There are no roles: every account gets the same limits and sees
+  only its own scans and APIs; the operator works in the Supabase dashboard, not in the app.
+  Google sign-in uses apifuzz's own button: Google returns a one-time code, the backend exchanges
+  it with the client secret, and Google's screen shows apifuzz, not Supabase.
 - **Accounts.** Sign-up and password reset give the same answer whether or not an address has an
   account. An account created with Google can never get a password (a database rule). The e-mail
   forms carry a Cloudflare Turnstile bot check that Supabase verifies.
-- **Scanning.** Only the lab and APIs whose owner proved control (or an admin approved): the
+- **Scanning.** Only the lab and APIs whose owner proved control (or the operator approved): the
   target's host is the engine's whole allowlist, the spec download never follows a redirect, a
   spec can't refer to other documents, and the server's own environment never reaches the engine.
   For a user's API every connection, the proof file's included, is checked at connect time and

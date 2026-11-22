@@ -18,10 +18,9 @@ from apifuzz_web.store import MemoryStore
 ROOT = Path(__file__).resolve().parents[2]
 LAB = "http://127.0.0.1:8000"
 
-ALICE = User(id="11111111-1111-4111-8111-111111111111", email="a@example.test", is_admin=False)
-BOB = User(id="22222222-2222-4222-8222-222222222222", email="b@example.test", is_admin=False)
-ADMIN = User(id="33333333-3333-4333-8333-333333333333", email="admin@example.test", is_admin=True)
-TOKENS = {"alice": ALICE, "bob": BOB, "admin": ADMIN}
+ALICE = User(id="11111111-1111-4111-8111-111111111111", email="a@example.test")
+BOB = User(id="22222222-2222-4222-8222-222222222222", email="b@example.test")
+TOKENS = {"alice": ALICE, "bob": BOB}
 NOW = datetime(2026, 11, 21, 15, 0, tzinfo=timezone.utc)
 
 

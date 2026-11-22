@@ -113,7 +113,7 @@ export interface ScanRequest {
   tokenB?: string;
 }
 
-/** A user's own API. An admin approves or rejects it by hand; only approved ones can be scanned. */
+/** A user's own API. Approved by a proof file, or by the site's operator by hand; only approved ones can be scanned. */
 export type TargetStatus = "pending" | "approved" | "rejected";
 
 /** How a user proves they control their API: publish `line` in a file at `url`. */
@@ -129,9 +129,9 @@ export interface OwnTarget {
   specUrl: string | null; // null when the spec was uploaded
   specName: string | null; // the uploaded file's name
   status: TargetStatus;
-  note: string | null; // the admin's note, usually with a rejection
+  note: string | null; // the operator's note, usually with a rejection
   createdAt: string;
-  verifiedAt: string | null; // proven by the file; null if approved by an admin (or not yet)
+  verifiedAt: string | null; // proven by the file; null if approved by hand (or not yet)
   proof?: Proof; // while pending, and while a proven API is kept (it's checked before every scan)
   scansLeftToday?: number; // approved ones only
 }

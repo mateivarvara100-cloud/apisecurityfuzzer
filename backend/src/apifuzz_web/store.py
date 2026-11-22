@@ -3,7 +3,7 @@ memory when no key is configured.
 
 Both tables have row level security on and no policies (see supabase/migrations), so browsers
 can't read or write them at all, even with a valid sign-in. Only this server can, with the secret
-key, and it decides who sees what: a user their own rows, an admin every scan.
+key, and it shows each account only its own rows.
 """
 
 import builtins  # the stores have a `list` method, which hides the built-in inside their bodies
@@ -37,8 +37,8 @@ class TargetRow:
     """A user's own API.
 
     It starts "pending". It becomes "approved" when the user proves control of it (the token in
-    a file on the API, see proof.py), which sets `verified_at`, or when an admin approves it by
-    hand in the Supabase table editor. Only an admin rejects one.
+    a file on the API, see proof.py), which sets `verified_at`, or when the site's operator
+    approves it by hand in the Supabase table editor. Only the operator rejects one.
     """
 
     user_id: str
@@ -48,7 +48,7 @@ class TargetRow:
     spec_url: str | None  # on the same origin; None when the spec was uploaded instead
     created_at: str  # UTC, ISO 8601
     status: str = "pending"  # "pending", "approved" or "rejected"
-    note: str | None = None  # the admin's note to the user
+    note: str | None = None  # the operator's note to the user
     verify_token: str = field(default_factory=lambda: secrets.token_hex(16))
     verified_at: str | None = None  # when the proof was first found; None if approved by hand
     spec_name: str | None = None  # the uploaded spec's file name; set exactly when one was uploaded
@@ -66,7 +66,7 @@ class Store(Protocol):
 
     def add(self, row: ScanRow) -> None: ...
     def get(self, scan_id: str) -> ScanRow | None: ...
-    def list(self, user_id: str | None, limit: int = 50) -> list[ScanRow]: ...
+    def list(self, user_id: str, limit: int = 50) -> list[ScanRow]: ...
     def count_since(self, since: datetime, user_id: str | None = None, target: str | None = None) -> int: ...
     def prune(self, before: datetime) -> None: ...
     def add_target(self, row: TargetRow) -> None: ...
@@ -103,9 +103,9 @@ class MemoryStore:
         with self._lock:
             return next((r for r in self._rows if r.id == scan_id), None)
 
-    def list(self, user_id: str | None, limit: int = 50) -> list[ScanRow]:
+    def list(self, user_id: str, limit: int = 50) -> list[ScanRow]:
         with self._lock:
-            rows = [r for r in self._rows if r.status == "done" and (user_id is None or r.user_id == user_id)]
+            rows = [r for r in self._rows if r.status == "done" and r.user_id == user_id]
         return sorted(rows, key=lambda r: r.created_at, reverse=True)[:limit]
 
     def count_since(self, since: datetime, user_id: str | None = None, target: str | None = None) -> int:
@@ -162,7 +162,7 @@ class MemoryStore:
             return next((t.spec_text for t in self._targets if t.id == target_id and t.user_id == user_id), None)
 
     def set_status(self, target_id: str, status: str, note: str | None = None) -> None:
-        """What an admin does in the table editor; only tests and local work call it."""
+        """What the operator does in the table editor; only tests and local work call it."""
         with self._lock:
             for t in self._targets:
                 if t.id == target_id:
@@ -202,10 +202,10 @@ class SupabaseStore:
         rows = self._check(self._http.get("/scans", params={"id": f"eq.{scan_id}", "select": self._COLUMNS})).json()
         return ScanRow(**rows[0]) if rows else None
 
-    def list(self, user_id: str | None, limit: int = 50) -> list[ScanRow]:
-        params = {"status": "eq.done", "order": "created_at.desc", "limit": str(limit), "select": self._COLUMNS}
-        if user_id is not None:
-            params["user_id"] = f"eq.{user_id}"
+    def list(self, user_id: str, limit: int = 50) -> list[ScanRow]:
+        # Always one account's scans: there is no way to list everyone's.
+        params = {"status": "eq.done", "order": "created_at.desc", "limit": str(limit), "select": self._COLUMNS,
+                  "user_id": f"eq.{user_id}"}
         return [ScanRow(**r) for r in self._check(self._http.get("/scans", params=params)).json()]
 
     def count_since(self, since: datetime, user_id: str | None = None, target: str | None = None) -> int:
@@ -249,7 +249,7 @@ class SupabaseStore:
         return bool(response.json())
 
     def mark_verified(self, target_id: str, user_id: str, when: str) -> bool:
-        # Only a pending target: one an admin rejected stays rejected.
+        # Only a pending target: one the operator rejected stays rejected.
         return self._update_own(target_id, user_id, {"status": "approved", "verified_at": when}, status="eq.pending")
 
     def set_spec(self, target_id: str, user_id: str, spec_url: str | None, spec_name: str | None,

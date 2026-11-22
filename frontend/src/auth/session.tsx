@@ -3,9 +3,8 @@
 // so the UI can be worked on. Pages see the same shape either way.
 //
 // Sign-up is open (the sign-up page, or Google). What an account may do is decided by the backend,
-// never here: it verifies the access token on every request, reads the role (user or admin) from
-// the token's app_metadata, which users can't edit, and applies the limits. Nothing in the
-// browser can enforce any of that.
+// never here: it verifies the access token on every request and applies the same limits to every
+// account. Nothing in the browser can enforce any of that.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Session as SupabaseSession } from "@supabase/supabase-js";

@@ -61,7 +61,7 @@ def add(client, who="alice", **overrides):
 
 
 def approve(store, url=API, status="approved", note=None):
-    for t in store._targets:  # what an admin does by hand in the Supabase table editor
+    for t in store._targets:  # what the operator does by hand in the Supabase table editor
         if t.base_url == url:
             store.set_status(t.id, status, note)
 

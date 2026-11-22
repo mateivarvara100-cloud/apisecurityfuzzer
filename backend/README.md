@@ -64,7 +64,9 @@ public address of its own.
   deploying a backend that uses it: the backend reads its columns.
 - Put the project's secret key (`sb_secret_...`) in `SUPABASE_SECRET_KEY`. Without it, scans are
   kept in memory and lost when the server stops.
-- Admins: set `app_metadata.role` to `"admin"` on the account (SQL editor), then sign in again.
+- There are no roles: every account has the same limits and sees only its own scans and APIs.
+  Everything an operator does (approving APIs by hand, looking at users and scans) is done in the
+  Supabase dashboard.
 
 **Users' own APIs (proof, or approving them by hand)**
 - A user adds an API on the Your APIs page; it is saved in `targets` with status `pending` and a

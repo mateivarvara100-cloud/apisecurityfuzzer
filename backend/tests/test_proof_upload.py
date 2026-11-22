@@ -119,7 +119,7 @@ def test_a_rejected_api_stays_rejected(client, store, proof):
     approve(store, status="rejected", note="Not your domain")
     publish(proof, t)
     r = client.post(f"/targets/{t['id']}/verify", headers=auth("alice"))
-    assert r.status_code == 403 and "admin" in r.json()["detail"]
+    assert r.status_code == 403 and "operator" in r.json()["detail"]
     listed = client.get("/targets", headers=auth("alice")).json()["targets"][0]
     assert listed["status"] == "rejected" and "proof" not in listed
 
