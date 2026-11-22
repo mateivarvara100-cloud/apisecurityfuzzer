@@ -14,8 +14,6 @@ host) and a small size cap. The proof is checked again before every scan of the 
 the file down withdraws the permission.
 """
 
-import secrets
-
 import httpx
 from apifuzz import __version__ as engine_version
 
@@ -28,10 +26,6 @@ _TIMEOUT = 10.0
 
 class ProofMissing(Exception):
     """The proof wasn't found. The message says what was seen instead, in the user's terms."""
-
-
-def new_token() -> str:
-    return secrets.token_hex(16)  # 128 random bits
 
 
 def proof_line(token: str) -> str:

@@ -18,9 +18,6 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
-# The phases of a scan, in order, as the web app names them.
-PHASES = ("waking", "spec", "login", "checks", "saving")
-
 # How long a finished job is remembered, so the web app can still read how it ended.
 KEEP_FINISHED_SECONDS = 30 * 60
 
