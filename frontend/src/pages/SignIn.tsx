@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { SAMPLE_REPORT } from "../api/service";
 import { authIsSimulated, useSession } from "../auth/session";
+import { useCaptcha } from "../components/Captcha";
 import { Evidence } from "../components/Evidence";
 import { GoogleSignIn } from "../components/GoogleSignIn";
 import { FuzzText } from "../components/FuzzText";
@@ -18,14 +19,18 @@ export function SignIn() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const captcha = useCaptcha("sign_in");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    // checked here too, so an empty form doesn't spend a bot-check token
+    if (!email.includes("@") || password.length === 0) return setError("Enter your e-mail address and password.");
     setBusy(true);
     setError(null);
     try {
-      await signInWithPassword(email.trim(), password);
+      await signInWithPassword(email.trim(), password, await captcha.token());
     } catch (err) {
+      captcha.reset(); // the token is spent either way; the next try needs a new one
       setError(failed(err));
     } finally {
       setBusy(false);
@@ -100,6 +105,7 @@ export function SignIn() {
             </p>
           )}
           <div>
+            {captcha.box}
             <button className="button" type="submit" disabled={busy}>
               {busy ? "Signing in…" : "Sign in with e-mail"}
             </button>

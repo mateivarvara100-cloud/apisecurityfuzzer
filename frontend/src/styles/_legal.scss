@@ -213,3 +213,13 @@
     font-size: var(--t-sm);
   }
 }
+
+// The bot check (components/Captcha), in the same cell as the submit button so the empty box takes
+// no room. When Cloudflare shows something in it (data-shown), it gets the form's 20px below.
+.captcha {
+  max-width: 100%;
+
+  &[data-shown] {
+    margin-bottom: 20px;
+  }
+}

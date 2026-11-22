@@ -42,3 +42,16 @@ in [.env.example](.env.example).
   generate a new key in Brevo and paste it into Supabase's SMTP settings.
 - Sending as a `@gmail.com` address through Brevo can't be signed for that domain (Brevo warns
   about DKIM and DMARC), so some inboxes put the e-mails in spam. A domain of your own fixes it.
+
+**Bot check on the e-mail forms (Cloudflare Turnstile)**
+- In Cloudflare: Turnstile -> Add widget, mode Managed, with the site's hostnames (add `localhost`
+  for local work). It gives a site key (public) and a secret key.
+- The site key goes in the frontend's `VITE_TURNSTILE_SITE_KEY`. The secret key goes only into
+  Supabase: Authentication -> Attack Protection -> Enable CAPTCHA protection, provider Turnstile.
+  It is not a setting of this backend or the frontend.
+- Order matters: deploy the frontend with the site key first, then switch protection on in
+  Supabase. With protection on and no site key, e-mail sign-in, sign-up and password reset are
+  refused. Google sign-in doesn't use it (Supabase doesn't ask for a check on that route).
+- Testing: Cloudflare's test site key `1x00000000000000000000AA` always passes, but Supabase
+  accepts its token only with the test secret `1x0000000000000000000000000000000AA`, so never
+  leave a test secret in a real project.

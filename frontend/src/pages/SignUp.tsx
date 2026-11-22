@@ -7,6 +7,7 @@ import { Link, Navigate } from "react-router-dom";
 import { severityLabel } from "../api/checks";
 import { SAMPLE_REPORT } from "../api/service";
 import { authIsSimulated, useSession } from "../auth/session";
+import { useCaptcha } from "../components/Captcha";
 import { FuzzText } from "../components/FuzzText";
 import { GoogleSignIn } from "../components/GoogleSignIn";
 import { MIN_PASSWORD } from "./ResetPassword";
@@ -50,6 +51,7 @@ export function SignUp() {
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; field: FieldName | null } | null>(null);
+  const captcha = useCaptcha("sign_up");
 
   if (!ready) return null;
   if (session) return <Navigate to="/" replace />;
@@ -68,9 +70,10 @@ export function SignUp() {
     setError(null);
     setBusy(true);
     try {
-      const outcome = await signUp(address, password);
+      const outcome = await signUp(address, password, await captcha.token());
       if (outcome === "confirm") setSentTo(address); // signed in at once otherwise; the page redirects
     } catch (err) {
+      captcha.reset(); // the token is spent either way; the next try needs a new one
       setError({ message: err instanceof Error ? err.message : "The account wasn't created. Try again.", field: null });
     } finally {
       setBusy(false);
@@ -183,6 +186,7 @@ export function SignUp() {
           {authIsSimulated && <span className="field__hint">Preview build: the account is made at once, nothing is sent.</span>}
           {errorFor(null)}
           <div>
+            {captcha.box}
             <button className="button" type="submit" disabled={busy}>
               {busy ? "Creating…" : "Create account"}
             </button>

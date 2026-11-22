@@ -157,11 +157,18 @@ export function Privacy() {
         <li>Render: runs the scan server.</li>
         <li>Vercel: serves this website.</li>
         <li>
-          Google: for "Continue with Google". The sign-in page loads Google's sign-in script from
-          accounts.google.com, so Google receives your IP address when you open that page and can read its own
+          Google: for "Continue with Google". The sign-in and sign-up pages load Google's sign-in script from
+          accounts.google.com, so Google receives your IP address when you open those pages and can read its own
           cookies, under Google's privacy policy. No other page contacts Google. When you sign in with Google, the
           scan server swaps Google's one-time code for your Google sign-in token and passes it on to Supabase
           without keeping it.
+        </li>
+        <li>
+          Cloudflare: the bot check (Turnstile) on the e-mail sign-in, sign-up and password-reset forms. Those pages
+          load Cloudflare's script from challenges.cloudflare.com, so Cloudflare receives your IP address and
+          information about your browser, which it uses to tell people from automated sign-ups, under Cloudflare's
+          privacy policy. Supabase checks the result with Cloudflare before it accepts the form. It is not used for
+          advertising.
         </li>
       </ul>
       <p>
@@ -172,8 +179,9 @@ export function Privacy() {
       <h2 id="cookies">Cookies and browser storage</h2>
       <p>
         This site sets no tracking or advertising cookies and loads nothing from third parties for tracking; even its
-        fonts are served from this site. Only the sign-in page loads something from Google: its sign-in script. It stores only what it needs to work, in your browser, so it needs no consent
-        banner:
+        fonts are served from this site. Two things come from elsewhere, only on the pages that need them: Google's
+        sign-in script on the sign-in and sign-up pages, and Cloudflare's bot check on the pages with an e-mail form.
+        This site stores only what it needs to work, in your browser, so it needs no consent banner:
       </p>
       <div className="table-wrap">
         <table className="table legal__table">
@@ -210,8 +218,8 @@ export function Privacy() {
         </table>
       </div>
       <p>
-        On the sign-in page, Google's script may set or read Google's own cookies; those are covered by Google's
-        policy. You can remove everything this site stored by signing out and clearing this site's data in
+        On those pages, Google's script may set or read Google's own cookies, and Cloudflare's check runs in its own
+        frame; each is covered by its provider's policy. You can remove everything this site stored by signing out and clearing this site's data in
         your browser.
       </p>
 

@@ -6,6 +6,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { authIsSimulated, GOOGLE_ONLY, useSession } from "../auth/session";
+import { useCaptcha } from "../components/Captcha";
 import { FuzzText } from "../components/FuzzText";
 
 export const MIN_PASSWORD = 10;
@@ -24,6 +25,7 @@ function RequestLink() {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const captcha = useCaptcha("reset_password");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -34,9 +36,10 @@ function RequestLink() {
     }
     setBusy(true);
     try {
-      await requestPasswordReset(email.trim());
+      await requestPasswordReset(email.trim(), await captcha.token());
       setSent(true);
     } catch (err) {
+      captcha.reset(); // the token is spent either way; the next try needs a new one
       setError(err instanceof Error ? err.message : "The link couldn't be sent. Try again in a minute.");
     } finally {
       setBusy(false);
@@ -89,6 +92,7 @@ function RequestLink() {
               </p>
             )}
             <div>
+              {captcha.box}
               <button className="button" type="submit" disabled={busy}>
                 {busy ? "Sending…" : "Send reset link"}
               </button>

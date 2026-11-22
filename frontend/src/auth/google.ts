@@ -5,7 +5,7 @@
 // Google's ID token (POST /auth/google), and Supabase signs in with that token
 // (signInWithIdToken). Nothing redirects through <project>.supabase.co.
 //
-// Google's script is loaded only on the sign-in page, so the click can open Google's window at
+// Google's script is loaded only on the sign-in and sign-up pages, so the click can open Google's window at
 // once (a browser only allows a popup straight from a click). No other page contacts Google.
 
 import { API_URL } from "../api/config";

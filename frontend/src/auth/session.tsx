@@ -25,15 +25,16 @@ interface SessionApi {
   ready: boolean; // false until a session left over from an earlier visit (or a redirect) is known
   notice: string | null; // why the last sign-in redirect was refused, if it was
   signInWithGoogle(): Promise<void>;
-  signInWithPassword(email: string, password: string): Promise<void>;
+  // `captchaToken`: from the bot check (components/Captcha), when Supabase has CAPTCHA protection on.
+  signInWithPassword(email: string, password: string, captchaToken?: string): Promise<void>;
   /**
    * Create an e-mail account. "confirm": a confirmation link was e-mailed (the usual case; also
    * the answer when the address is taken, so nobody can find out who has an account).
    * "signed-in": the project doesn't ask for confirmation, and the account is ready.
    */
-  signUp(email: string, password: string): Promise<"confirm" | "signed-in">;
+  signUp(email: string, password: string, captchaToken?: string): Promise<"confirm" | "signed-in">;
   /** E-mail a link to choose a new password. Succeeds whether or not the account exists. */
-  requestPasswordReset(email: string): Promise<void>;
+  requestPasswordReset(email: string, captchaToken?: string): Promise<void>;
   /** Set a new password for the signed-in account (after following the reset link). */
   updatePassword(password: string): Promise<void>;
   /**
@@ -111,6 +112,7 @@ function explain(message: string): string {
   if (/already registered|already been registered/i.test(message)) {
     return "There's already an account for that address. Sign in, or use Forgot your password?.";
   }
+  if (/captcha/i.test(message)) return "The bot check didn't pass. Try again; if it keeps failing, reload the page.";
   if (/email not confirmed/i.test(message)) {
     return "Confirm your e-mail address first: open the link we sent when you created the account.";
   }
@@ -174,7 +176,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const signUp = useCallback(async (email: string, password: string): Promise<"confirm" | "signed-in"> => {
+  const signUp = useCallback(async (email: string, password: string, captchaToken?: string): Promise<"confirm" | "signed-in"> => {
     setNotice(null);
     if (AUTH_MODE === "off") throw new Error(NOT_SET_UP);
     if (!supabase) {
@@ -186,17 +188,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: window.location.origin + "/" },
+      options: { emailRedirectTo: window.location.origin + "/", captchaToken },
     });
     if (error) throw new Error(explain(error.message));
     return data.session ? "signed-in" : "confirm";
   }, []);
 
-  const requestPasswordReset = useCallback(async (email: string) => {
+  const requestPasswordReset = useCallback(async (email: string, captchaToken?: string) => {
     if (AUTH_MODE === "off") throw new Error(NOT_SET_UP);
     if (!supabase) return; // preview: nothing is sent
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: window.location.origin + "/reset-password",
+      captchaToken,
     });
     if (error) throw new Error(explain(error.message));
   }, []);
@@ -209,7 +212,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (error) throw new Error(explain(error.message));
   }, [session]);
 
-  const signInWithPassword = useCallback(async (email: string, password: string) => {
+  const signInWithPassword = useCallback(async (email: string, password: string, captchaToken?: string) => {
     setNotice(null);
     if (!email.includes("@") || password.length === 0) throw new Error("Enter your e-mail address and password.");
     if (AUTH_MODE === "off") throw new Error(NOT_SET_UP);
@@ -219,7 +222,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setSession(next);
       return;
     }
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({ email, password, options: { captchaToken } });
     if (error) throw new Error(explain(error.message));
   }, []);
 

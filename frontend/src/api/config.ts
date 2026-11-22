@@ -35,6 +35,15 @@ export const GOOGLE_CLIENT_ID: string = /^[\w-]+\.apps\.googleusercontent\.com$/
   ? env.VITE_GOOGLE_CLIENT_ID
   : "";
 
+/**
+ * Cloudflare Turnstile site key (public: it is in the page). With it, the e-mail sign-in, sign-up
+ * and password-reset forms pass a bot-check token to Supabase. Turn on CAPTCHA protection in
+ * Supabase (with the matching secret key) only once this is deployed, or those forms stop working.
+ */
+export const TURNSTILE_SITE_KEY: string = /^[0-3]x[\w-]{16,}$/.test((env.VITE_TURNSTILE_SITE_KEY || "").trim())
+  ? env.VITE_TURNSTILE_SITE_KEY.trim()
+  : "";
+
 /** Who runs this deployment, for the terms and privacy notice. Set both before going public. */
 export const OPERATOR_NAME: string = (env.VITE_OPERATOR_NAME || "").trim();
 export const CONTACT_EMAIL: string = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test((env.VITE_CONTACT_EMAIL || "").trim())
