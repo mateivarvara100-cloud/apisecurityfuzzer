@@ -106,6 +106,9 @@ def test_client_address_behind_a_proxy_is_the_last_forwarded_entry():
 def test_settings_must_be_sane():
     base = {"SUPABASE_URL": "https://project.supabase.co"}
     assert load_config(base).targets[0].base_url == "http://127.0.0.1:8000"
+    assert load_config(base).targets[0].health_url == "http://127.0.0.1:8000/health"
+    assert load_config(base).wake_timeout == 30
+    assert load_config({**base, "TARGET_WAKE_SECONDS": "90"}).wake_timeout == 90
     for bad in [{}, {"SUPABASE_URL": "http://project.supabase.co"}, {"SUPABASE_URL": "https://p.supabase.co/x"},
                 {**base, "LAB_SPEC_URL": "http://169.254.169.254/"}, {**base, "SCANS_PER_DAY": "lots"},
                 {**base, "SCANS_PER_DAY": "0"}, {**base, "LAB_URL": "http://u:p@lab"}]:

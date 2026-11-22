@@ -3,10 +3,11 @@
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import httpx
 import pytest
 
 from apifuzz_web.config import Config, Target
-from apifuzz_web.engine import ScanFailed, scan_target
+from apifuzz_web.engine import ScanFailed, scan_target, wake
 
 
 def lab_target(url: str, **accounts: str) -> Target:
@@ -76,3 +77,79 @@ def test_nothing_answering_is_a_failure_not_a_clean_report():
     with pytest.raises(ScanFailed):
         # nothing listens on port 9 (discard) on a test machine
         scan_target(lab_target("http://127.0.0.1:9"), "http://127.0.0.1:9/openapi.json", ["bola"], CONFIG)
+
+
+class FakeTime:
+    """A clock that only moves when the code under test sleeps, so waiting tests run instantly."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def answers(*replies: httpx.Response | Exception):
+    """A transport that gives these replies in order (repeating the last), recording each URL."""
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        reply = replies[min(len(seen), len(replies)) - 1]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    return httpx.MockTransport(handle), seen
+
+
+JSON_OK = httpx.Response(200, json={"status": "ok"})
+STARTING_PAGE = httpx.Response(200, text="<html>Service waking up</html>", headers={"content-type": "text/html"})
+
+
+def test_wake_waits_through_refusals_and_a_starting_page():
+    transport, seen = answers(httpx.ConnectError("refused"), httpx.Response(503), STARTING_PAGE, JSON_OK)
+    t = FakeTime()
+    wake("http://127.0.0.1:8000/health", 30, transport=transport, sleep=t.sleep, clock=t.clock)
+    assert len(seen) == 4 and set(seen) == {"http://127.0.0.1:8000/health"}
+    assert t.now < 30
+
+
+def test_wake_gives_up_in_time_having_sent_nothing_to_the_api():
+    transport, seen = answers(httpx.ConnectError("refused"))
+    t = FakeTime()
+    with pytest.raises(ScanFailed) as caught:
+        wake("http://127.0.0.1:8000/health", 30, transport=transport, sleep=t.sleep, clock=t.clock)
+    assert caught.value.requests_sent == 0  # so it doesn't count towards the user's daily scans
+    assert "30 seconds" in str(caught.value)
+    assert 30 <= t.now < 33 and set(seen) == {"http://127.0.0.1:8000/health"}
+
+
+def test_wake_never_follows_a_redirect():
+    transport, seen = answers(httpx.Response(302, headers={"location": "http://169.254.169.254/latest/meta-data/"}))
+    t = FakeTime()
+    with pytest.raises(ScanFailed):
+        wake("http://127.0.0.1:8000/health", 10, transport=transport, sleep=t.sleep, clock=t.clock)
+    assert set(seen) == {"http://127.0.0.1:8000/health"}
+
+
+def test_wake_is_skipped_when_switched_off():
+    transport, seen = answers(httpx.ConnectError("refused"))
+    wake("http://127.0.0.1:8000/health", 0, transport=transport)
+    assert seen == []
+
+
+def test_a_scan_wakes_the_lab_first(lab_url):
+    target = Target(**{**lab_target(lab_url).__dict__, "health_url": f"{lab_url}/health"})
+    outcome = scan_target(target, f"{lab_url}/openapi.json", ["bola"], CONFIG)
+    assert any(f["check"] == "bola" for f in outcome.report["findings"])
+
+
+def test_a_lab_that_never_comes_up_fails_before_any_scan_request():
+    target = Target(**{**lab_target("http://127.0.0.1:9").__dict__, "health_url": "http://127.0.0.1:9/health"})
+    with pytest.raises(ScanFailed) as caught:
+        scan_target(target, "http://127.0.0.1:9/openapi.json", ["bola"], Config(supabase_url="https://p.supabase.co", wake_timeout=1))
+    assert caught.value.requests_sent == 0 and "1 seconds" in str(caught.value)

@@ -12,9 +12,12 @@ server:
 """
 
 import json
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from apifuzz.checks import ScanContext, all_checks, select_checks
 from apifuzz.endpoint_model import build_endpoints
 from apifuzz.errors import ApifuzzError
@@ -50,7 +53,41 @@ def in_engine_order(checks: list[str]) -> list[str]:
     return [c for c in CHECK_IDS if c in wanted]
 
 
+def wake(
+    url: str,
+    within: float,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Wait, for at most `within` seconds, until `url` answers 200 with JSON.
+
+    The lab starts next to this server, and a host on free hosting sleeps when idle and takes
+    about a minute to answer again. A scan waits only a few seconds per response, so it would
+    fail against a target that is still starting. This asks the target's own health address
+    first, without following redirects (a "starting up" page is not an answer), and raises
+    ScanFailed with nothing sent to the API if the target doesn't come up in time.
+    """
+    if within <= 0:
+        return
+    deadline = clock() + within
+    with httpx.Client(follow_redirects=False, transport=transport) as client:
+        while (left := deadline - clock()) > 0:
+            try:
+                answer = client.get(url, timeout=min(left, 30.0))
+                if answer.status_code == 200 and answer.headers.get("content-type", "").startswith("application/json"):
+                    return
+            except httpx.HTTPError:
+                pass  # not up yet
+            sleep(min(2.0, max(0.0, deadline - clock())))
+    raise ScanFailed(f"the target didn't answer within {round(within)} seconds. It may still be starting; "
+                     "try again in a minute.")
+
+
 def scan_target(target: Target, spec_url: str, checks: list[str], config: Config) -> ScanOutcome:
+    if target.health_url:
+        wake(target.health_url, config.wake_timeout)
     allowlist = Allowlist([host_entry(target.base_url)])
     client: HttpClient | None = None
     try:

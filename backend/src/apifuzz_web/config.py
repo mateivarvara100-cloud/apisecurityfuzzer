@@ -26,6 +26,9 @@ class Target:
     # APIFUZZ_* settings handed to the engine for this target only (test accounts, login path).
     # The engine never reads the server's own environment.
     engine_env: dict[str, str] = field(default_factory=dict, repr=False)
+    # Answers 200 with JSON once the target is up. Asked first, patiently, so a target that is
+    # still starting (or asleep on free hosting) doesn't fail the scan. Empty: no such check.
+    health_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class Config:
     retention_days: int = 30  # scans older than this are deleted
     requests_per_minute_ip: int = 60  # any request, per caller address
     requests_per_minute_user: int = 30  # signed-in requests, per account
+    wake_timeout: float = 30.0  # seconds a scan waits for the target's health address to answer
     # True on Render: the caller's address is the last X-Forwarded-For entry, added by its proxy.
     behind_proxy: bool = False
     # Google sign-in from the web app's own button: the OAuth web client and its secret.
@@ -82,7 +86,8 @@ def _lab(env: dict[str, str]) -> Target:
         for key in ("USER_A", "PASSWORD_A", "USER_B", "PASSWORD_B", "LOGIN_PATH")
         if env.get(f"LAB_{key}")
     }
-    return Target(id="lab", label="VulnShop lab", base_url=base, spec_url=spec, engine_env=engine_env)
+    return Target(id="lab", label="VulnShop lab", base_url=base, spec_url=spec, engine_env=engine_env,
+                  health_url=f"{base}/health")
 
 
 def load_config(env: dict[str, str] | None = None) -> Config:
@@ -108,6 +113,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         retention_days=_int(env, "RETENTION_DAYS", 30, 1, 365),
         requests_per_minute_ip=_int(env, "REQUESTS_PER_MINUTE_IP", 60, 5, 6000),
         requests_per_minute_user=_int(env, "REQUESTS_PER_MINUTE_USER", 30, 5, 6000),
+        wake_timeout=float(_int(env, "TARGET_WAKE_SECONDS", 30, 0, 300)),
         behind_proxy=(env.get("BEHIND_PROXY") or "").strip().lower() in ("1", "true", "yes"),
         google_client_id=(env.get("GOOGLE_CLIENT_ID") or "").strip() or None,
         google_client_secret=(env.get("GOOGLE_CLIENT_SECRET") or "").strip() or None,

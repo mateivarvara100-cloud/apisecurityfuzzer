@@ -17,6 +17,23 @@ uv run pytest                 # the tests
 The lab target must be running too (see "Lab target" in the main README). Every setting is listed
 in [.env.example](.env.example).
 
+## Deploy it (Render)
+
+[render.yaml](../render.yaml) describes one free web service. Its start command,
+[start.sh](start.sh), runs the VulnShop lab inside the same service on `127.0.0.1:8000`, so the
+scanner reaches it and the internet never does. The deliberately vulnerable lab must never get a
+public address of its own.
+
+- In Render: New -> Blueprint, pick this repository. Render asks for each secret listed in
+  render.yaml (Supabase URL and secret key, Google client id and secret, the lab's two test
+  accounts); take them from your `backend/.env`. They live only in Render.
+- `ALLOWED_ORIGINS` in render.yaml is the frontend's address. Change it there if the site moves.
+- Then set the frontend's `VITE_API_URL` (in Vercel) to the service's `https://...onrender.com`
+  address and redeploy the frontend.
+- A free service sleeps after 15 minutes without traffic and takes about a minute to wake, so the
+  first request after a quiet spell is slow. A scan first waits for the lab's `/health`
+  (`TARGET_WAKE_SECONDS`, default 30) so it doesn't fail while the lab is starting.
+
 ## What has to be set up outside this repository
 
 **Supabase**

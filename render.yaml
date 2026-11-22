@@ -1,0 +1,38 @@
+# Render Blueprint: the scan API, with the VulnShop lab running inside it on 127.0.0.1 only
+# (backend/start.sh), so the deliberately vulnerable lab is never reachable from the internet.
+#
+# No secrets in this file. Render asks for every `sync: false` value when the Blueprint is first
+# created; change them later under the service's Environment tab. Setup: backend/README.md.
+services:
+  - type: web
+    name: apifuzz-api
+    runtime: python
+    plan: free
+    region: frankfurt  # near the Supabase project (EU); can't be changed after creation
+    buildCommand: cd backend && uv sync --frozen --no-dev
+    startCommand: sh backend/start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.7"  # the version the tests run on
+      - key: BEHIND_PROXY
+        value: "1"
+      - key: ALLOWED_ORIGINS
+        value: https://apifuzz.vercel.app
+      # The lab runs inside this service (start.sh), at the default LAB_URL http://127.0.0.1:8000.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: LAB_USER_A
+        sync: false
+      - key: LAB_PASSWORD_A
+        sync: false
+      - key: LAB_USER_B
+        sync: false
+      - key: LAB_PASSWORD_B
+        sync: false
