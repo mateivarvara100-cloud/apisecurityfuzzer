@@ -48,6 +48,10 @@ public address of its own.
   render.yaml (Supabase URL and secret key, Google client id and secret, the lab's two test
   accounts); take them from your `backend/.env`. They live only in Render.
 - `ALLOWED_ORIGINS` in render.yaml is the frontend's address. Change it there if the site moves.
+- `CLIENT_IP_HEADER=cf-connecting-ip` in render.yaml tells the rate limits where the caller's
+  address is: Cloudflare, in front of Render, sets that header and refuses requests that try to
+  send it. Never use `X-Forwarded-For`: Render keeps what the caller sent, so it can be forged.
+  The server refuses to start if the old `BEHIND_PROXY` setting is still there.
 - Then set the frontend's `VITE_API_URL` (in Vercel) to the service's `https://...onrender.com`
   address and redeploy the frontend.
 - A free service sleeps after 15 minutes without traffic and takes about a minute to wake, so the

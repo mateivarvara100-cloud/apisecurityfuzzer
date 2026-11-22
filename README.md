@@ -9,16 +9,18 @@ the severity, and the fix.
 deliberately vulnerable demo API, or your own API once you've proven you control it, with the same engine. The [sample report](https://apifuzz.vercel.app/sample)
 needs no account. See [Hosted demo](#hosted-demo).
 
-> **Status.** Five checks work today: `bola` (BOLA/IDOR by token swapping), `auth-required`,
-> `mass-assignment`, `rate-limit` and `injection` (SQL/NoSQL, detection only). Reports come
-> as tables, JSON, HTML and SARIF (for GitHub code scanning). Every check is verified against the bundled VulnShop lab on each test run.
-> The hosted demo is live: a web app on Vercel and its scan server on Render.
+> **Status: complete.** All four phases of the plan and the hosted demo's roadmap are built and
+> live. Five checks: `bola` (BOLA/IDOR by token swapping), `auth-required`, `mass-assignment`,
+> `rate-limit` and `injection` (SQL/NoSQL, detection only). Reports come as tables, JSON, HTML and
+> SARIF (for GitHub code scanning). Every check is verified against the bundled VulnShop lab on
+> each test run. The engine is on PyPI (`pip install apifuzz`, 0.6.1); the hosted demo runs on
+> Vercel and Render.
 
 **Contents:** [What it checks](#what-it-checks) · [Quickstart](#quickstart) ·
 [Scan your own API](#scan-your-own-api) · [Use it in CI](#use-it-in-ci) · [Reports](#reports) ·
 [How each check works](#how-each-check-works) · [Lab target](#lab-target-vulnshop) ·
 [Hosted demo](#hosted-demo) · [Architecture](#architecture) · [Develop](#develop) ·
-[Scope & ethics](#scope--ethics) · [What's next](#whats-next)
+[Scope & ethics](#scope--ethics) · [Possible extensions](#possible-extensions)
 
 The planted BOLA flaw in the bundled lab, found by swapping two test accounts' tokens:
 
@@ -65,7 +67,14 @@ All probes are meant to detect a flaw, not to use it. Details for each check are
 
 ## Quickstart
 
-Needs Python 3.11 or newer, and Docker for the demo.
+Needs Python 3.11 or newer. To use the scanner on your own API, install it from PyPI and go to
+[Scan your own API](#scan-your-own-api):
+
+```bash
+pip install apifuzz
+```
+
+To run the demo against the bundled lab you also need Docker, and a checkout of this repository:
 
 ```bash
 python -m venv .venv
@@ -388,7 +397,8 @@ button that stops it between two steps and keeps what it found so far. Reports a
 days and only their owner can open them. Two scans of the same target can be
 compared: what is new, what was fixed, and what is still open (a finding that is missing only
 counts as fixed if the later scan tested that endpoint again). The
-[sample report](https://apifuzz.vercel.app/sample) is public.
+[sample report](https://apifuzz.vercel.app/sample) and the
+[How it works](https://apifuzz.vercel.app/how-it-works) guide are public.
 
 **Your own API.** Add it on the Your APIs page (HTTPS, a public address), with its spec linked
 (on the same address) or uploaded as a file, for APIs that don't publish theirs. Then prove you
@@ -417,7 +427,7 @@ flowchart LR
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| [frontend/](frontend/) | Vercel | React 19 + TypeScript (Vite, SCSS). Sign-in, new scan, history, reports, terms and privacy pages. |
+| [frontend/](frontend/) | Vercel | React 19 + TypeScript (Vite, SCSS). Sign-in, new scan with live progress, history, reports, compare, Your APIs, How it works, terms and privacy pages. |
 | [backend/](backend/) | Render (free tier) | FastAPI. Checks the sign-in, enforces the limits, runs the engine, stores the redacted report. |
 | VulnShop lab | inside the backend | Started by [backend/start.sh](backend/start.sh) on `127.0.0.1`, so only the scanner can reach it. |
 | Supabase | EU | Accounts, sign-in, sign-in e-mails (sent through Brevo), and the `scans` and `targets` tables. |
@@ -439,12 +449,20 @@ How it is kept safe:
   pinned to a public address (no private, loopback, metadata or similar addresses, even if the
   name's DNS answer changes mid-scan), and answers are capped at 5 MB. Specs that use YAML aliases
   are refused, because a few hundred bytes of them can expand without limit and stall the parser.
+  Answers are redacted in linear time, so a hostile API can't stall the scan with a huge body.
   Test-account tokens are never stored and are removed from every report.
 - **The API.** Rate limits per address and per account (and separate ones for proof checks,
   uploads and watching a scan's progress), a 16 KB body cap (1.5 MB only for a spec upload),
   strict CORS (only the site), security headers, and validation errors that never echo the input.
+  The caller's address comes from Cloudflare's `CF-Connecting-IP` (`CLIENT_IP_HEADER`), never
+  from `X-Forwarded-For`, which a caller can forge on Render.
   The `scans` and `targets` tables have row-level security with no policies, so browsers can't
-  read them at all, and the server may change only a target's approval and spec columns.
+  read them at all, and the server may change only a target's approval and spec columns. No
+  database function in the exposed schema can be called from a browser.
+- **Audited.** A pass over a 50-item list of common web-app flaws (secrets, access control,
+  injection, XSS, CORS, headers, dependencies, exposed files) on Nov 22, 2026. It found and fixed
+  a forgeable client address, a slow regular expression and a callable database function; npm
+  and pip-audit report no known vulnerabilities.
 - **The site.** A strict Content Security Policy (scripts only from the site, Google's sign-in
   and Cloudflare's check), self-hosted fonts, no tracking or analytics, and terms and privacy
   pages.
@@ -536,11 +554,11 @@ a release: bump `version` in `pyproject.toml` (PyPI refuses a re-upload of an ex
 then publish a GitHub Release with a tag like `v0.2.0`. The workflow builds, runs `twine check`,
 and uploads. The published version is the one in `pyproject.toml`, not the git tag.
 
-## What's next
+## Possible extensions
 
-The plan's four phases are built, and so is the hosted demo's roadmap: self-service proof of
-control, scans in the background with progress and Cancel, comparing scans, and spec upload.
-Ideas beyond it:
+The project is complete: the plan's four phases are built, and so is the hosted demo's roadmap
+(self-service proof of control, scans in the background with progress and Cancel, comparing
+scans, and spec upload). Ideas if it is ever taken further:
 
 - **A DNS record as proof**, for APIs that can't serve a file under `/.well-known/`.
 - **A short queue** instead of "one scan at a time, try again in a minute".
