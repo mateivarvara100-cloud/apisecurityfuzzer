@@ -5,9 +5,20 @@ describes for common OWASP API Top 10 flaws. You point it at an API you are auth
 give it two test accounts, and get a report a developer can act on: the endpoint, the evidence,
 the severity, and the fix.
 
+**Try it in the browser:** <https://apifuzz.vercel.app>. Sign in and scan VulnShop, a
+deliberately vulnerable demo API, with the same engine. The [sample report](https://apifuzz.vercel.app/sample)
+needs no account. See [Hosted demo](#hosted-demo).
+
 > **Status.** Five checks work today: `bola` (BOLA/IDOR by token swapping), `auth-required`,
 > `mass-assignment`, `rate-limit` and `injection` (SQL/NoSQL, detection only). Reports come
 > as tables, JSON, HTML and SARIF (for GitHub code scanning). Every check is verified against the bundled VulnShop lab on each test run.
+> The hosted demo is live: a web app on Vercel and its scan server on Render.
+
+**Contents:** [What it checks](#what-it-checks) · [Quickstart](#quickstart) ·
+[Scan your own API](#scan-your-own-api) · [Use it in CI](#use-it-in-ci) · [Reports](#reports) ·
+[How each check works](#how-each-check-works) · [Lab target](#lab-target-vulnshop) ·
+[Hosted demo](#hosted-demo) · [Architecture](#architecture) · [Develop](#develop) ·
+[Scope & ethics](#scope--ethics) · [What's next](#whats-next)
 
 The planted BOLA flaw in the bundled lab, found by swapping two test accounts' tokens:
 
@@ -365,6 +376,61 @@ docker compose down                          # stop
 Lab accounts: `alice`/`alice` (token `lab-token-alice`) and `bob`/`bob` (token `lab-token-bob`).
 They exist only in the lab, so it's fine to put them in `.env`.
 
+## Hosted demo
+
+<https://apifuzz.vercel.app> runs this engine behind a sign-in. Anyone can create an account
+(Google, or e-mail and password), pick the checks, scan the VulnShop lab, and read the report:
+the same findings, evidence and fixes as the CLI. Reports are kept for 30 days and only their
+owner (or an admin) can open them. The [sample report](https://apifuzz.vercel.app/sample) is public.
+
+The demo scans the lab and nothing else. To scan your own API, use the CLI
+([Scan your own API](#scan-your-own-api)). Limits: 5 scans per account per day, 50 for the whole
+server, one scan at a time, at most 400 requests per scan.
+
+```mermaid
+flowchart LR
+    browser[Browser] -->|pages| vercel[Vercel<br/>React app]
+    browser -->|sign-in| supabase[(Supabase<br/>Auth + scan history)]
+    browser -->|bot check| turnstile[Cloudflare<br/>Turnstile]
+    browser -->|"scans (signed in)"| api[Render<br/>FastAPI + apifuzz engine]
+    api -->|verify token, store reports| supabase
+    api -->|127.0.0.1 only| lab[VulnShop lab<br/>inside the same service]
+```
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| [frontend/](frontend/) | Vercel | React 19 + TypeScript (Vite, SCSS). Sign-in, new scan, history, reports, terms and privacy pages. |
+| [backend/](backend/) | Render (free tier) | FastAPI. Checks the sign-in, enforces the limits, runs the engine, stores the redacted report. |
+| VulnShop lab | inside the backend | Started by [backend/start.sh](backend/start.sh) on `127.0.0.1`, so only the scanner can reach it. |
+| Supabase | EU | Accounts, sign-in, sign-in e-mails (sent through Brevo), and the `scans` table. |
+
+How it is kept safe:
+
+- **Sign-in.** The backend verifies every Supabase token against the project's public keys
+  (ES256, audience, issuer). The admin role is read only from `app_metadata`, which users can't
+  change. Google sign-in uses apifuzz's own button: Google returns a one-time code, the backend
+  exchanges it with the client secret, and Google's screen shows apifuzz, not Supabase.
+- **Accounts.** Sign-up and password reset give the same answer whether or not an address has an
+  account. An account created with Google can never get a password (a database rule). The e-mail
+  forms carry a Cloudflare Turnstile bot check that Supabase verifies.
+- **Scanning.** Only server-configured targets: the target's host is the engine's whole
+  allowlist, the spec download never follows a redirect, and the server's own environment never
+  reaches the engine. Test-account tokens are removed from every report.
+- **The API.** Rate limits per address and per account, a 16 KB body cap, strict CORS (only the
+  site), security headers, and validation errors that never echo the input. The `scans` table
+  has row-level security with no policies, so browsers can't read it at all.
+- **The site.** A strict Content Security Policy (scripts only from the site, Google's sign-in
+  and Cloudflare's check), self-hosted fonts, no tracking or analytics, and terms and privacy
+  pages.
+- **Scanned by itself.** apifuzz was run against the demo's own backend. The first run showed the
+  API spec didn't declare which routes need a sign-in, so those couldn't be checked; once it did,
+  the scan found no flaws.
+
+On the free tier the backend sleeps after 15 minutes without traffic, so the first request after
+a quiet spell takes about a minute. Setting it up yourself: [backend/README.md](backend/README.md)
+(Supabase, Google, e-mail, Turnstile, Render) and [frontend/README.md](frontend/README.md)
+(Vercel).
+
 ## Architecture
 
 ```mermaid
@@ -401,6 +467,8 @@ The HTTP client is the only code that touches the target. Checks share one inter
 | `src/apifuzz/errors.py` | The error types shown to the user as plain messages. |
 | `tests/` | Unit tests against a fake network, plus ground-truth scans of the real lab app in both modes. |
 
+The web app around the engine lives in `frontend/` and `backend/` (see [Hosted demo](#hosted-demo)).
+
 ## Develop
 
 ```bash
@@ -415,6 +483,13 @@ The tests need no Docker: they run the lab app in-process and require exactly th
 results from the normal lab and no findings from the hardened one. CI
 ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs them on Linux and Windows for Python
 3.11 to 3.13, and also boots the real container and runs the demo scan.
+
+The web app has its own checks:
+
+```bash
+cd backend && uv sync && uv run pytest && uv run ruff check . && uv run mypy src
+cd frontend && npm install && npm run build   # type-checks, then builds
+```
 
 ## Scope & ethics
 
@@ -437,6 +512,14 @@ and uploads. The published version is the one in `pyproject.toml`, not the git t
 
 ## What's next
 
-- A small hosted demo (Phase 4): the same engine behind a login, limited to approved targets.
-  In progress: the web app is in `frontend/` and its server in `backend/`. How to run and set
-  them up, including the e-mail settings, is in [backend/README.md](backend/README.md).
+The hosted demo (Phase 4) is live. Next, roughly in this order:
+
+- **Scan your own API from the browser.** Targets approved by hand at first, then self-service
+  proof of ownership (a file under `/.well-known/` or a DNS record). Every user target gets a
+  network guard (HTTPS only, no private, loopback or cloud-metadata addresses, the resolved
+  address pinned for the whole scan), and two short-lived test tokens that are used for that scan
+  only and never stored.
+- **Scans in the background**, with live progress and a Cancel button, instead of one long request.
+- **Compare scans** of the same target: new, fixed and still-open findings.
+- **Upload a spec** instead of linking it, for APIs that don't publish theirs (without fetching
+  remote `$ref`s).

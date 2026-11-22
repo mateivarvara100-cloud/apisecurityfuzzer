@@ -1,64 +1,82 @@
-# apifuzz web (Phase 4)
+# apifuzz web
 
-The front end of the hosted demo: a signed-in user picks an allowlisted target, confirms they are
-authorized, starts a scan, and reads the same findings the CLI produces. It never runs checks
-itself; the backend runs the apifuzz engine and returns its JSON report.
+The front end of the hosted demo, live at <https://apifuzz.vercel.app>. A signed-in user picks
+the checks, confirms they are allowed to test the target, starts a scan of the VulnShop lab, and
+reads the same findings the CLI produces. It never runs checks itself: the backend
+([../backend](../backend)) runs the apifuzz engine and returns its JSON report.
 
-React 19 + TypeScript, built with Vite, styled with SCSS. Meant for Vercel (`vercel.json` sends
-every path to the single page).
+React 19 + TypeScript, built with Vite, styled with SCSS. Deployed on Vercel.
 
 ```sh
 cd frontend
 npm install
-npm run dev        # http://127.0.0.1:5173
-npm run build      # type-check, then build into dist/
+cp .env.example .env.local   # then fill it in; .env.local is git-ignored
+npm run dev                  # http://localhost:5173
+npm run build                # type-check, then build into dist/
+npm run preview              # the built app, with the production security headers
 ```
 
-## Status
+## Settings
 
-Only the UI exists. `VITE_API_MODE=mock` (the default) answers from
-`src/data/sample-scan.json`, a redacted scan of the VulnShop lab, and keeps history in the
-browser. Still to build: the FastAPI backend, scan storage in Supabase, and the live
-`ScanService` in `src/api/service.ts`.
+All of them are `VITE_` variables, so they end up in the public page: never put a secret here.
+Locally they go in `.env.local`; on Vercel under Settings -> Environment Variables (type
+Config), and a change needs a redeploy because Vite builds them in.
+[.env.example](.env.example) explains each one.
 
-The browser checks the allowlist only to explain a refusal early. The server must enforce it, for
-the target and for the spec download.
+| Variable | What it is |
+| --- | --- |
+| `VITE_API_MODE` | `live` calls the backend; `mock` answers from the bundled sample scan (for UI work) |
+| `VITE_API_URL` | The backend, e.g. `https://apifuzz-api.onrender.com` (locally `http://127.0.0.1:8001`) |
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` | The Supabase project (public values). Without them sign-in is simulated in `npm run dev` |
+| `VITE_GOOGLE_CLIENT_ID` | Google's OAuth web client id, for the Google button |
+| `VITE_TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key, for the bot check on the e-mail forms |
+| `VITE_OPERATOR_NAME`, `VITE_CONTACT_EMAIL` | Who runs the site, shown in the terms and privacy notice |
 
-## Sign-in (Google, or e-mail and password)
+## Sign-in
 
-Sign-in goes through Supabase Auth once `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are set
-in `.env.local`. Without them it is simulated: both buttons sign you in at once.
+- **Google.** apifuzz's own button opens Google's window (Google Identity Services, code flow).
+  Google returns a one-time code, the backend exchanges it for Google's ID token (it holds the
+  client secret), and Supabase signs in with that token, so Google's screen names apifuzz. If
+  Google's script can't load, the button falls back to Supabase's redirect. On the sign-up page
+  a Google account that already has an account is refused ("sign in instead").
+- **E-mail and password.** Sign-up needs a 10+ character password and a confirmation link sent
+  by e-mail. "Forgot your password?" e-mails a reset link. Both say the same thing whether or not
+  the address has an account. An account created with Google has no password and can't get one.
+- **Bot check.** The e-mail sign-in, sign-up and reset forms send Supabase a Cloudflare Turnstile
+  token (`src/components/Captcha.tsx`). It is invisible unless Cloudflare needs an answer.
+  Google sign-in doesn't use it.
 
-To turn on Google:
+Each outside address (Supabase's redirect URLs, Google's JavaScript origins, Turnstile's
+hostnames) must list the site's address. The setup is in [../backend/README.md](../backend/README.md).
 
-1. In Google Cloud Console, create an OAuth client of type "Web application". Add Supabase's
-   callback as an authorized redirect URI: `https://<project-ref>.supabase.co/auth/v1/callback`.
-2. In Supabase, go to Authentication, then Sign In / Providers, then Google. Paste the client ID
-   and secret there. The secret stays in Supabase and never goes in this app.
-3. In Supabase, under Authentication, then URL Configuration, set the Site URL to the deployed app.
-   Add `http://127.0.0.1:5173/` to the redirect URLs for local work.
-4. Keep sign-in limited to the owner, as the plan says. Sign in once with your own Google
-   account, then turn off "Allow new users to sign up" in Supabase. Any other Google account is
-   then refused, and the sign-in page explains why. The backend should also check the e-mail in
-   the access token, because nothing in the browser can enforce who signs in.
+## Security
+
+- [vercel.json](vercel.json) sets the headers: a strict Content Security Policy (scripts only
+  from the site, Google's sign-in script and Cloudflare's check; connections only to Supabase and
+  the backend), no framing, HSTS, and a Cross-Origin-Opener-Policy that still allows Google's
+  window. `npm run preview` sends the same headers, so the built app can be checked locally.
+- Fonts are self-hosted (`@fontsource`), and the build keeps them as files so the policy can
+  stay `font-src 'self'`. Nothing is loaded for tracking.
+- The browser checks the allowlist only to explain a refusal early. The backend enforces it.
 
 ## Layout
 
 | Path | What it holds |
 | --- | --- |
-| `src/api/` | Report types (mirroring `report.py`), the check list, config, and the `ScanService` |
-| `src/auth/` | The Supabase client and sign-in state (Google, e-mail and password, or simulated) |
-| `src/lib/evidence.ts` | Which request in a finding was sent by whom, read from each check's fixed evidence order |
-| `src/components/` | Layout, the report view, a finding, and the evidence timeline |
-| `src/pages/` | Sign in, new scan, scan report, history, public sample report |
-| `src/styles/` | SCSS partials: tokens, mixins, base, chrome, forms, report, evidence |
+| `src/api/` | Report types (mirroring `report.py`), the check list, settings, and the scan service (live or mock) |
+| `src/auth/` | Sign-in state, the Supabase client, Google's code flow, and the Turnstile loader |
+| `src/components/` | Layout, the report view, a finding, the evidence timeline, the Google button, the bot check, the storage notice |
+| `src/pages/` | Sign in, sign up, reset password, new scan, history, scan report, sample report, terms and privacy |
+| `src/lib/` | Evidence ordering, formatting, motion helpers |
+| `src/styles/` | SCSS partials: tokens, mixins, base, chrome, forms, report, evidence, legal, motion |
 
 ## Design notes
 
-- Account A is indigo and account B is teal everywhere they appear. Requests with no token get a
-  hollow grey badge. The token swap is the core of the BOLA check, and the evidence timeline is
-  built around it.
+- Black, white and red, the same family as the HTML report's dark theme. Account A (the owner)
+  is white and account B (the one who got an object that isn't theirs) is red wherever they
+  appear; requests with no token are grey. The token swap is the core of the BOLA check, and the
+  evidence timeline is built around it.
 - The mono face (Martian Mono) is used only for HTTP content: endpoints, requests and bodies.
   The UI text is Schibsted Grotesk.
-- Severity is written in sentence case and paired with a colored square, so it doesn't depend on
-  color alone.
+- Severity is written in sentence case and paired with a mark, so it doesn't depend on color
+  alone. Every text color pair passes WCAG AA.
