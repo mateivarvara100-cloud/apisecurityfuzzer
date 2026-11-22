@@ -1,0 +1,227 @@
+// A scan in the background (ScanProgress) and two scans compared (Compare page).
+@use "mixins" as *;
+
+// ---- a running scan ----
+.progress {
+  display: grid;
+  gap: 24px;
+  max-width: 640px;
+  margin-top: 8px;
+
+  &__status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    font-size: var(--t-xl);
+    font-weight: 600;
+  }
+
+  &__time {
+    @include mono(var(--t-sm));
+    color: var(--ink-3);
+    font-weight: 400;
+  }
+
+  // The five phases as a short checklist: done ones dim, the current one carries the red mark.
+  &__phases {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+    border-left: 1px solid var(--rule);
+  }
+
+  &__phase {
+    position: relative;
+    padding: 2px 0 2px 18px;
+    color: var(--ink-3);
+    transition: color var(--t-med) ease;
+
+    &::before {
+      content: "";
+      position: absolute;
+      left: -4px;
+      top: 0.7em;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--paper);
+      border: 1px solid var(--rule-strong);
+      transition: background-color var(--t-med) ease, border-color var(--t-med) ease;
+    }
+
+    &--done {
+      color: var(--ink-2);
+
+      &::before {
+        background: var(--ink-2);
+        border-color: var(--ink-2);
+      }
+    }
+
+    &--now {
+      color: var(--ink);
+      font-weight: 600;
+
+      &::before {
+        background: var(--accent);
+        border-color: var(--accent);
+        box-shadow: 0 0 0 4px var(--actor-b-tint);
+      }
+    }
+  }
+
+  &__check {
+    font-weight: 400;
+    color: var(--ink-2);
+  }
+
+  &__bar-wrap {
+    display: grid;
+    gap: 8px;
+  }
+
+  &__bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  &__fill {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    transform-origin: left center;
+    transition: transform 600ms var(--ease-out);
+  }
+
+  &__count {
+    @include mono;
+    color: var(--ink-2);
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+
+    .field__hint {
+      flex: 1 1 260px;
+    }
+  }
+}
+
+// ---- the link above a report ----
+.report-compare {
+  font-size: var(--t-sm);
+  margin-bottom: 8px;
+}
+
+// ---- two scans compared ----
+.compare {
+  &__picks {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 280px));
+    gap: 16px 24px;
+    margin: 24px 0 32px;
+
+    @include below(sm) {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  &__summary {
+    list-style: none;
+    margin: 0 0 32px;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  // New is red (something got worse), fixed is white, still open and not re-tested stay grey.
+  &__count {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    color: var(--ink-2);
+
+    &--fresh {
+      border-color: var(--accent);
+      color: var(--accent-text);
+    }
+
+    &--fixed {
+      color: var(--ink);
+    }
+  }
+
+  &__number {
+    @include mono(var(--t-xl));
+    font-weight: 600;
+  }
+
+  &__group {
+    margin-bottom: 32px;
+    max-width: 900px;
+
+    .field__hint {
+      margin: 4px 0 12px;
+      display: block;
+    }
+  }
+
+  &__group-count {
+    @include mono(var(--t-sm));
+    color: var(--ink-3);
+    font-weight: 400;
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  &__item {
+    display: grid;
+    grid-template-columns: 90px minmax(0, 1fr);
+    gap: 4px 16px;
+    align-items: baseline;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule);
+
+    @include below(sm) {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  &__main {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  &__title {
+    font-weight: 600;
+  }
+
+  &__where {
+    font-size: var(--t-sm);
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+
+    code {
+      @include mono;
+    }
+  }
+}

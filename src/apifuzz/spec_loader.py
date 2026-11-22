@@ -4,6 +4,7 @@ The one public function is load_spec(); everything else in this file is a helper
 Its output (a plain Python dict) is the input to endpoint_model.build_endpoints().
 """
 
+import json  # to tell a JSON spec (which can't contain YAML aliases) from a YAML one
 import re  # regular expressions: used to cut prance's fake filename out of error messages
 from pathlib import Path  # file paths as objects; Path(...).read_text() reads a whole file
 from typing import Any  # type hint meaning "any value" (a spec can contain anything)
@@ -33,6 +34,7 @@ def load_spec(
     client: httpx.Client | None = None,
     follow_redirects: bool = True,
     allowlist: Allowlist | None = None,
+    allow_yaml_aliases: bool = True,
 ) -> dict[str, Any]:
     """Return the validated spec at `source` (a file path or http(s) URL) with internal $refs inlined.
 
@@ -44,9 +46,27 @@ def load_spec(
     anything is sent. `follow_redirects=False` makes a redirected spec URL an error, so the
     download can't be sent on to a host nobody approved. `scan` uses both; `endpoints`, which
     sends nothing but this one download, uses neither.
+
+    `allow_yaml_aliases=False` refuses a YAML spec that uses anchors and aliases (&name, *name);
+    see load_spec_text().
     """
     # Step 1: get the raw text, from disk or from the network.
     text = _read_source(source, client, follow_redirects, allowlist)
+    return load_spec_text(text, source, allow_yaml_aliases=allow_yaml_aliases)
+
+
+def load_spec_text(text: str, source: str = "the spec", *, allow_yaml_aliases: bool = True) -> dict[str, Any]:
+    """Return the validated spec in `text` (JSON or YAML) with internal $refs inlined.
+
+    The same as load_spec() for a spec that is already in hand, such as an uploaded file: nothing
+    is read or downloaded, and a $ref that points outside the spec is refused. `source` names the
+    spec in error messages.
+
+    `allow_yaml_aliases=False` is for specs from people you don't trust, such as on a server. A
+    YAML alias repeats an earlier part of the document, and aliases of aliases grow it
+    exponentially: a few hundred bytes can expand to billions of nodes and keep the parser busy
+    for hours (the "billion laughs" attack). JSON has no aliases, so JSON specs are unaffected.
+    """
     # Step 2: an empty file would make prance crash with a confusing internal error, so catch it here.
     if not text.strip():
         raise SpecError(f"{source}: the spec is empty")
@@ -54,6 +74,8 @@ def load_spec(
     # document ("http://...", "other.yaml#/...", "file:///...") would make prance fetch that URL or
     # read that file, which a spec must never be able to do: a downloaded spec could otherwise
     # point the scanner at internal addresses or local files, past the allowlist.
+    if not allow_yaml_aliases:
+        _refuse_yaml_aliases(source, text)
     _refuse_external_refs(source, text)
 
     # Step 3: let prance parse the text, replace every $ref with its real content, and validate.
@@ -136,6 +158,30 @@ def _fetch(url: str, client: httpx.Client | None, follow_redirects: bool = True)
         # `finally` runs whether we returned or raised, so the connection is always cleaned up.
         if owns_client:
             client.close()
+
+
+def _refuse_yaml_aliases(source: str, text: str) -> None:
+    """Raise SpecError if YAML `text` uses an alias. Reads the event stream, so nothing is expanded."""
+    try:
+        json.loads(text)
+        return  # JSON: no aliases possible
+    except ValueError:
+        pass
+    from ruamel.yaml import YAML  # prance's own YAML library
+    from ruamel.yaml.events import AliasEvent
+
+    try:
+        for event in YAML(typ="safe").parse(text):
+            if isinstance(event, AliasEvent):
+                raise SpecError(
+                    f"{source}: the spec uses YAML aliases (*name), which aren't accepted here because "
+                    "they can make a small file expand without limit. Write the repeated parts out, or "
+                    "use $ref, or upload it as JSON."
+                )
+    except SpecError:
+        raise
+    except Exception:  # noqa: BLE001 - not valid YAML: prance reports that itself, with a better message
+        return
 
 
 def _refuse_external_refs(source: str, text: str) -> None:

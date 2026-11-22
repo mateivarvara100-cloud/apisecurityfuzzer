@@ -67,11 +67,39 @@ export interface Report {
 /** One scan as the web app stores it: the request that started it plus the report it produced. */
 export interface ScanRecord {
   id: string;
+  status?: "done";
   target: string;
   specUrl: string;
   checks: CheckId[];
   createdAt: string;
   report: Report;
+}
+
+/** A scan while it runs in the background on the server, or one that ended without a report. */
+export type JobStatus = "running" | "done" | "failed" | "cancelled";
+
+/** waking the target, reading the spec, logging in the test accounts, running checks, saving */
+export type JobPhase = "waking" | "spec" | "login" | "checks" | "saving";
+
+export interface ScanJob {
+  id: string;
+  status: JobStatus;
+  target: string;
+  label: string;
+  checks: CheckId[];
+  createdAt: string;
+  error: string | null;
+  cancelRequested: boolean;
+  stoppedEarly: boolean; // cancelled once the checks had started: the report is partial
+  progress: {
+    phase: JobPhase;
+    check: string | null;
+    step: number;
+    steps: number;
+    requestsSent: number;
+    maxRequests: number;
+    recent: { method: string; path: string; status: number | null }[]; // paths only, no query
+  };
 }
 
 export interface ScanRequest {
@@ -88,14 +116,23 @@ export interface ScanRequest {
 /** A user's own API. An admin approves or rejects it by hand; only approved ones can be scanned. */
 export type TargetStatus = "pending" | "approved" | "rejected";
 
+/** How a user proves they control their API: publish `line` in a file at `url`. */
+export interface Proof {
+  url: string;
+  line: string;
+}
+
 export interface OwnTarget {
   id: string;
   label: string;
   url: string; // https origin
-  specUrl: string;
+  specUrl: string | null; // null when the spec was uploaded
+  specName: string | null; // the uploaded file's name
   status: TargetStatus;
   note: string | null; // the admin's note, usually with a rejection
   createdAt: string;
+  verifiedAt: string | null; // proven by the file; null if approved by an admin (or not yet)
+  proof?: Proof; // while pending, and while a proven API is kept (it's checked before every scan)
   scansLeftToday?: number; // approved ones only
 }
 
@@ -105,9 +142,11 @@ export interface TargetList {
   scansPerTargetPerDay: number;
 }
 
-export interface NewTarget {
+/** A spec: linked, or uploaded as a file's text. Exactly one is set. */
+export type SpecSource = { specUrl: string; spec?: undefined } | { spec: { name: string; text: string }; specUrl?: undefined };
+
+export type NewTarget = {
   label: string;
   url: string;
-  specUrl: string;
   authorized: boolean;
-}
+} & SpecSource;

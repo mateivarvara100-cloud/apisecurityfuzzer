@@ -3,8 +3,11 @@
 import threading
 from datetime import timedelta
 
+from apifuzz_web.app import _in_background
 from apifuzz_web.engine import ScanFailed
-from conftest import ADMIN, ALICE, LAB, auth, scan_body
+from conftest import ADMIN, ALICE, LAB, auth, finished, scan_body, start, wait_for
+
+_wait_for = wait_for
 
 # ---- sign-in --------------------------------------------------------------------------------
 
@@ -119,8 +122,11 @@ def test_a_huge_body_without_a_length_is_refused(client, runner):
 
 def test_a_scan_runs_and_is_stored(client, runner):
     r = client.post("/scans", json=scan_body(checks=["injection", "bola", "bola"]), headers=auth("alice"))
-    assert r.status_code == 201
-    record = r.json()
+    assert r.status_code == 202
+    job = r.json()
+    assert job["status"] == "done" and job["target"] == LAB and job["label"] == "VulnShop lab"
+    record = client.get(f"/scans/{job['id']}", headers=auth("alice")).json()
+    assert record["id"] == job["id"] and record["status"] == "done" and record["report"]["findings"] == []
     # the engine's order, no repeats
     assert runner.calls == [(LAB, f"{LAB}/openapi.json", ["bola", "injection"])]
     assert record["checks"] == ["bola", "injection"] and record["target"] == LAB
@@ -132,15 +138,15 @@ def test_a_scan_runs_and_is_stored(client, runner):
 
 def test_a_failed_scan_says_why(client, runner, store):
     runner.fail = ScanFailed("could not log in as test account A", requests_sent=1)
-    r = client.post("/scans", json=scan_body(), headers=auth("alice"))
-    assert r.status_code == 502 and "could not log in" in r.json()["detail"]
+    job = finished(client)
+    assert job["status"] == "failed" and "could not log in" in job["error"] and "report" not in job
     assert client.get("/scans", headers=auth("alice")).json() == []  # not in the history...
     assert client.get("/me", headers=auth("alice")).json()["scansLeftToday"] == 4  # ...but it counts
 
 
 def test_a_scan_that_never_reached_the_target_does_not_count(client, runner):
     runner.fail = ScanFailed("the spec is invalid", requests_sent=0)
-    assert client.post("/scans", json=scan_body(), headers=auth("alice")).status_code == 502
+    assert finished(client)["status"] == "failed"
     assert client.get("/me", headers=auth("alice")).json()["scansLeftToday"] == 5
 
 
@@ -149,42 +155,44 @@ def test_a_scan_that_never_reached_the_target_does_not_count(client, runner):
 
 def test_the_daily_limit_per_user(client, runner, clock):
     for _ in range(5):
-        assert client.post("/scans", json=scan_body(), headers=auth("alice")).status_code == 201
+        assert client.post("/scans", json=scan_body(), headers=auth("alice")).status_code == 202
     r = client.post("/scans", json=scan_body(), headers=auth("alice"))
     assert r.status_code == 429 and r.json()["field"] == "limit" and "midnight UTC" in r.json()["detail"]
     assert len(runner.calls) == 5
     # someone else still can; and the next day alice can again
-    assert client.post("/scans", json=scan_body(), headers=auth("bob")).status_code == 201
+    assert client.post("/scans", json=scan_body(), headers=auth("bob")).status_code == 202
     clock[0] += timedelta(days=1)
-    assert client.post("/scans", json=scan_body(), headers=auth("alice")).status_code == 201
+    assert client.post("/scans", json=scan_body(), headers=auth("alice")).status_code == 202
 
 
 def test_an_admin_has_no_daily_limit(make_client, runner):
     client = make_client(scans_per_day=1, global_scans_per_day=1, requests_per_minute_user=100)
     for _ in range(4):
-        assert client.post("/scans", json=scan_body(), headers=auth("admin")).status_code == 201
+        assert client.post("/scans", json=scan_body(), headers=auth("admin")).status_code == 202
 
 
 def test_the_daily_limit_for_the_whole_server(make_client):
     client = make_client(global_scans_per_day=2)
-    assert client.post("/scans", json=scan_body(), headers=auth("alice")).status_code == 201
-    assert client.post("/scans", json=scan_body(), headers=auth("bob")).status_code == 201
+    assert client.post("/scans", json=scan_body(), headers=auth("alice")).status_code == 202
+    assert client.post("/scans", json=scan_body(), headers=auth("bob")).status_code == 202
     r = client.post("/scans", json=scan_body(), headers=auth("alice"))
     assert r.status_code == 429 and "This server" in r.json()["detail"]
 
 
-def test_one_scan_at_a_time(client, runner):
+def test_one_scan_at_a_time(make_client, runner):
+    client = make_client(start_background=_in_background)  # a real background thread
     runner.block = threading.Event()
-    first: dict = {}
-    t = threading.Thread(target=lambda: first.update(r=client.post("/scans", json=scan_body(), headers=auth("alice"))))
-    t.start()
+    first = start(client)
+    assert first.status_code == 202 and first.json()["status"] == "running"
     assert runner.started.wait(5)
-    second = client.post("/scans", json=scan_body(), headers=auth("bob"))
+    second = start(client, who="bob")
     assert second.status_code == 503 and "Another scan" in second.json()["detail"]
+    again = start(client)  # the same user is told it's their own scan
+    assert again.status_code == 409 and "still running" in again.json()["detail"]
     runner.block.set()
-    t.join(5)
-    assert first["r"].status_code == 201
-    assert len(runner.calls) == 1
+    assert _wait_for(client, first.json()["id"], "done")
+    assert start(client, who="bob").status_code == 202  # the lock was released
+    assert len(runner.calls) == 2
 
 
 def test_requests_per_minute_per_user(make_client):

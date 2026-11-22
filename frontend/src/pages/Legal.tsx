@@ -42,7 +42,8 @@ export function Terms() {
       <h2>Scan only what you're allowed to scan</h2>
       <p>
         A scan sends real requests to the target. You can scan the VulnShop lab, a deliberately vulnerable demo API run
-        for this purpose, and your own APIs once they are approved.
+        for this purpose, and your own APIs once they are approved: when you've proven you control one, or an admin has
+        approved it.
       </p>
       <p>
         You may only add an API that you own or have written permission to test. Ticking "I own this API or have written
@@ -52,8 +53,11 @@ export function Terms() {
       <h3>Your own APIs</h3>
       <ul>
         <li>
-          Each API you add is checked by hand before it can be scanned. An approval can be refused or withdrawn at any
-          time, without giving a reason, and approving an API doesn't mean anyone has checked that you may test it.
+          Before an API can be scanned you prove that you control it, by publishing a file with a line this site gives you
+          at <code>/.well-known/apifuzz-verify.txt</code> on it. The file is checked again before every scan: removing it
+          withdraws your permission. Publishing the file shows control of the address, not permission to test it; that
+          is still your confirmation to give. An admin may also approve, refuse or withdraw an API at any time, without
+          giving a reason.
         </li>
         <li>
           A scan sends probes meant to find flaws: marker values in parameters, requests with one test account's token
@@ -70,7 +74,9 @@ export function Terms() {
 
       <h2>Don't misuse the service</h2>
       <ul>
-        <li>Don't try to get around the scan limits, the approval of APIs, the address checks, or the sign-in.</li>
+        <li>
+          Don't try to get around the scan limits, the proof or approval of APIs, the address checks, or the sign-in.
+        </li>
         <li>Don't attack this site, its servers or the services it relies on, or use it to reach anyone else's.</li>
         <li>Don't create accounts in bulk or share your account.</li>
         <li>
@@ -154,9 +160,12 @@ export function Privacy() {
               <td>Until you ask for your account to be deleted</td>
             </tr>
             <tr>
-              <td>The APIs you add: their name, address and spec address, whether they were approved, and any note</td>
+              <td>
+                The APIs you add: their name, address, the spec address or the spec file you uploaded, the proof token and
+                when the proof was found, whether they were approved, and any note
+              </td>
               <td>To let you scan them, and so an admin can decide whether they may be scanned (needed to provide the service)</td>
-              <td>Until you remove the API or your account is deleted</td>
+              <td>Until you change the spec, remove the API, or your account is deleted</td>
             </tr>
             <tr>
               <td>
@@ -176,7 +185,10 @@ export function Privacy() {
       </div>
       <p>
         The test-account tokens you enter to scan your own API are used for that scan only. They are not stored, not
-        logged, and are removed from the report.
+        logged, and are removed from the report. To check the proof, the scan server fetches the proof file from your
+        API, when you press Check now and before each scan; it keeps nothing from it but whether the line was there.
+        While a scan runs, its progress (including the paths of its latest requests) is held in the scan server's
+        memory only, and forgotten within half an hour of the scan ending.
       </p>
       <p>Your data is not sold, not used for advertising, and not shared except with the providers below.</p>
 

@@ -105,6 +105,49 @@ def test_a_delete_names_the_owner_so_someone_elses_target_is_never_touched():
     assert store.delete_target("1 or 1=1", "u2") is False and len(seen) == 1  # never sent
 
 
+TID = "4f7c2a8e-1b3d-4c5e-9f6a-7b8c9d0e1f2a"
+
+
+def test_a_list_leaves_the_uploaded_spec_text_out():
+    seen, store = fake_postgrest(lambda r: httpx.Response(200, json=[]))
+    store.list_targets("u1")
+    columns = seen[0].url.params["select"].split(",")
+    assert "spec_text" not in columns and {"verify_token", "verified_at", "spec_name"} <= set(columns)
+
+
+def test_verifying_changes_only_the_owners_pending_target():
+    seen, store = fake_postgrest(lambda r: httpx.Response(200, json=[{"id": TID}]))
+    assert store.mark_verified(TID, "u1", "2026-11-23T10:00:00+00:00") is True
+    request = seen[0]
+    params = request.url.params
+    assert request.method == "PATCH" and request.url.path == "/rest/v1/targets"
+    assert params["id"] == f"eq.{TID}" and params["user_id"] == "eq.u1" and params["status"] == "eq.pending"
+    assert params["select"] == "id"  # the answer never carries the spec text
+    assert json.loads(request.content) == {"status": "approved", "verified_at": "2026-11-23T10:00:00+00:00"}
+
+
+def test_nothing_matched_is_false_and_a_bad_id_is_never_sent():
+    seen, store = fake_postgrest(lambda r: httpx.Response(200, json=[]))
+    assert store.mark_verified(TID, "u1", "now") is False  # someone else's, rejected, or gone
+    assert store.set_spec("1 or 1=1", "u1", None, "a.json", "{}") is False
+    assert store.get_spec_text("../x", "u1") is None
+    assert len(seen) == 1
+
+
+def test_a_spec_is_set_and_read_back_by_its_owner_only():
+    def answer(r):
+        if r.method == "PATCH":
+            return httpx.Response(200, json=[{"id": TID}])
+        return httpx.Response(200, json=[{"spec_text": "openapi: 3.0.3"}])
+
+    seen, store = fake_postgrest(answer)
+    assert store.set_spec(TID, "u1", None, "a.yaml", "openapi: 3.0.3") is True
+    assert json.loads(seen[0].content) == {"spec_url": None, "spec_name": "a.yaml", "spec_text": "openapi: 3.0.3"}
+    assert seen[0].url.params["user_id"] == "eq.u1" and "status" not in seen[0].url.params
+    assert store.get_spec_text(TID, "u1") == "openapi: 3.0.3"
+    assert seen[1].url.params["user_id"] == "eq.u1" and seen[1].url.params["select"] == "spec_text"
+
+
 # ---- rate limiter ---------------------------------------------------------------------------
 
 

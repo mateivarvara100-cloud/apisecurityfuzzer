@@ -32,6 +32,9 @@ class Target:
     # A user's own API: every connection goes through the public-address guard (netguard), and
     # its answers are size-capped. False only for targets this server configures itself.
     guarded: bool = False
+    # A spec the user uploaded instead of linking: scanned from this text, nothing downloaded.
+    spec_text: str | None = field(default=None, repr=False)
+    spec_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,7 +51,9 @@ class Config:
     burst: int = 15  # requests the rate-limit check sends to one endpoint
     max_requests: int = 400  # a scan stops after this many requests
     request_timeout: float = 10.0  # seconds to wait for each response
-    scan_wait: float = 20.0  # seconds a scan waits for the one before it to finish
+    # Seconds a new scan waits for the one before it to end. Short: scans run in the background,
+    # so the one before may take minutes, and the web app says another is running instead.
+    scan_wait: float = 2.0
     retention_days: int = 30  # scans older than this are deleted
     requests_per_minute_ip: int = 60  # any request, per caller address
     requests_per_minute_user: int = 30  # signed-in requests, per account

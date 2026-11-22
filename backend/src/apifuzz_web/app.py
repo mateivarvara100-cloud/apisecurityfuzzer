@@ -1,26 +1,37 @@
 """The HTTP API the web app calls. Every route except /health needs a Supabase sign-in.
 
-    GET  /health       is the server up (no sign-in; Render's health check)
-    GET  /me           who you are, your scans left today, the targets you may scan
-    GET  /targets      your own APIs and whether each is approved
-    POST /targets      ask for one of your APIs to be added (an admin approves it)
-    DELETE /targets/{id}  remove one of your APIs
-    POST /scans        run a scan; answers with the finished report
-    GET  /scans        your scans, newest first (an admin sees everyone's)
-    GET  /scans/{id}   one scan; someone else's is "not found", the same as one that doesn't exist
-    POST /auth/google  finish a Google sign-in: trade Google's one-time code for its ID token
-                       (no sign-in needed: this is how one starts)
+    GET    /health               is the server up (no sign-in; Render's health check)
+    GET    /me                   who you are, your scans left today, the targets you may scan
+    GET    /targets              your own APIs, whether each is approved, and how to prove each
+    POST   /targets              add one of your APIs, with its spec linked or uploaded
+    PUT    /targets/{id}/spec    change an API's spec (a new link or a new upload)
+    POST   /targets/{id}/verify  look for the proof file on the API; approve it if it's there
+    DELETE /targets/{id}         remove one of your APIs
+    POST   /scans                start a scan in the background; answers at once with its job
+    GET    /scans                your scans, newest first (an admin sees everyone's)
+    GET    /scans/{id}           one scan: the report once done, else how it's going
+    GET    /scans/{id}/progress  how a running scan is going (polled; its own rate limit)
+    POST   /scans/{id}/cancel    stop a running scan; what it found so far is kept
+    POST   /auth/google          finish a Google sign-in: trade Google's one-time code for its ID token
+                                 (no sign-in needed: this is how one starts)
+
+Someone else's scan or API always answers "not found", the same as one that doesn't exist.
 
 Run locally:  uvicorn apifuzz_web.main:app --host 127.0.0.1 --port 8001
 """
 
 import logging
 import threading
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 from apifuzz import __version__ as engine_version
+from apifuzz.endpoint_model import build_endpoints
+from apifuzz.errors import SpecError
+from apifuzz.spec_loader import load_spec_text
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,16 +41,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apifuzz_web.auth import AuthError, AuthUnavailable, TokenVerifier, User
 from apifuzz_web.config import Config, ConfigError, Target, load_config, origin_of
-from apifuzz_web.engine import ScanFailed, ScanOutcome, in_engine_order, scan_target
+from apifuzz_web.engine import Progress, ScanFailed, ScanOutcome, in_engine_order, scan_target
 from apifuzz_web.google import GoogleCodeExchange, GoogleSignInError, GoogleUnavailable
 from apifuzz_web.guards import Guards, RateLimiter, client_ip
+from apifuzz_web.jobs import Job, JobBoard
 from apifuzz_web.netguard import BlockedAddress, check_user_url, public_addresses
+from apifuzz_web.proof import ProofMissing, check_proof, proof_line, proof_url
 from apifuzz_web.store import MemoryStore, ScanRow, Store, StoreError, SupabaseStore, TargetRow, is_uuid
 
 log = logging.getLogger("apifuzz_web")
 
 CheckId = Literal["bola", "auth-required", "mass-assignment", "rate-limit", "injection"]
-FormField = Literal["target", "specUrl", "authorized", "checks", "limit", "label", "url", "tokenA", "tokenB"]
+FormField = Literal["target", "specUrl", "spec", "authorized", "checks", "limit", "label", "url", "tokenA", "tokenB"]
+
+MAX_SPEC_BYTES = 1_000_000  # an uploaded spec; the request carrying it may be a little larger
 
 
 class Refused(Exception):
@@ -54,7 +69,9 @@ class ScanIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target: str = Field(max_length=2048)
-    specUrl: str = Field(max_length=2048)  # noqa: N815 (the web app's field name)
+    # The lab's spec address. For the user's own API the server uses the spec stored with it, so
+    # this may be empty; if it is sent, it must match.
+    specUrl: str = Field(default="", max_length=2048)  # noqa: N815 (the web app's field name)
     checks: list[CheckId] = Field(min_length=1, max_length=5)
     authorized: bool
     # Bearer tokens of two test accounts on the user's own API. Used for this one scan, in memory
@@ -63,12 +80,25 @@ class ScanIn(BaseModel):
     tokenB: str | None = Field(default=None, max_length=4096)  # noqa: N815
 
 
-class TargetIn(BaseModel):
+class SpecFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    name: str = Field(max_length=255)
+    text: str = Field(max_length=MAX_SPEC_BYTES)
+
+
+class SpecIn(BaseModel):
+    """A spec: linked (`specUrl`) or uploaded (`spec`), exactly one of the two."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    specUrl: str | None = Field(default=None, max_length=2048)  # noqa: N815
+    spec: SpecFile | None = None
+
+
+class TargetIn(SpecIn):
     label: str = Field(max_length=200)
     url: str = Field(max_length=300)
-    specUrl: str = Field(max_length=2048)  # noqa: N815
     authorized: bool
 
 
@@ -78,7 +108,8 @@ class GoogleCodeIn(BaseModel):
     code: str = Field(min_length=10, max_length=2048)
 
 
-Runner = Callable[[Target, str, list[str], Config], ScanOutcome]
+Runner = Callable[[Target, str, list[str], Config, Progress], ScanOutcome]
+ProofChecker = Callable[[str, str], None]  # (base_url, token); raises ProofMissing
 
 
 def _midnight_utc(now: datetime) -> datetime:
@@ -97,6 +128,17 @@ def _clean_token(value: str | None, field: FormField) -> str | None:
     return token
 
 
+def _file_name(name: str) -> str:
+    """An uploaded file's name as shown back: no folders, no control characters, not too long."""
+    base = PureWindowsPath(PurePosixPath(name).name).name
+    cleaned = "".join(c for c in base if c.isprintable()).strip()
+    return (cleaned or "spec")[:100]
+
+
+def _in_background(work: Callable[[], None]) -> None:
+    threading.Thread(target=work, daemon=True, name="scan").start()
+
+
 def create_app(
     config: Config | None = None,
     *,
@@ -105,6 +147,8 @@ def create_app(
     runner: Runner = scan_target,
     google: GoogleCodeExchange | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    start_background: Callable[[Callable[[], None]], None] = _in_background,
+    proof_checker: ProofChecker = check_proof,
 ) -> FastAPI:
     config = config or load_config()
     if store is None:
@@ -115,11 +159,20 @@ def create_app(
             store = MemoryStore()
     verifier = verifier or TokenVerifier(config.supabase_url)
     user_limiter = RateLimiter(config.requests_per_minute_user, 60)
+    # A running scan's page asks for progress every few seconds; that has its own allowance, so
+    # watching a scan doesn't use up the account's general one.
+    progress_limiter = RateLimiter(60, 60)
+    # Each proof check fetches a file from the user's API: a few per account in ten minutes.
+    verify_limiter = RateLimiter(10, 600)
+    # Checking an uploaded spec takes some CPU: a few per account a minute.
+    upload_limiter = RateLimiter(6, 60)
     google = google or GoogleCodeExchange(config.google_client_id, config.google_client_secret)
     # Signing in is rare: a tighter limit per address than the general one.
     sign_in_limiter = RateLimiter(10, 60)
     # One scan at a time on the whole server: the lab is shared, and the free tier is small.
+    # Taken when a scan starts and released by the scan's own thread when it ends.
     scan_lock = threading.Lock()
+    jobs = JobBoard()
 
     # No interactive docs: they load scripts from a CDN, and the API is documented in openapi.json.
     app = FastAPI(title="apifuzz web", version=engine_version, docs_url=None, redoc_url=None)
@@ -132,7 +185,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(config.allowed_origins),
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
         allow_credentials=False,  # the sign-in travels in the Authorization header, not a cookie
         max_age=600,
@@ -153,7 +206,7 @@ def create_app(
     bearer = HTTPBearer(auto_error=False, scheme_name="supabase", bearerFormat="JWT",
                         description="The Supabase access token of the signed-in user.")
 
-    def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> User:
+    def signed_in(credentials: HTTPAuthorizationCredentials | None, limiter: RateLimiter) -> User:
         token = credentials.credentials.strip() if credentials and credentials.scheme.lower() == "bearer" else ""
         if not token:
             raise HTTPException(401, "Sign in first.", headers={"WWW-Authenticate": "Bearer"})
@@ -163,11 +216,22 @@ def create_app(
             raise HTTPException(401, f"Sign in again: {exc}.", headers={"WWW-Authenticate": "Bearer"}) from exc
         except AuthUnavailable as exc:
             raise HTTPException(503, "Sign-in can't be checked right now. Try again in a minute.") from exc
-        wait = user_limiter.hit(user.id)
+        wait = limiter.hit(user.id)
         if wait is not None:
             raise HTTPException(429, "Too many requests. Wait a moment and try again.",
                                 headers={"Retry-After": str(max(1, round(wait)))})
         return user
+
+    def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> User:
+        return signed_in(credentials, user_limiter)
+
+    def watching_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> User:
+        return signed_in(credentials, progress_limiter)
+
+    def per_user(limiter: RateLimiter, user: User, message: str) -> None:
+        wait = limiter.hit(user.id)
+        if wait is not None:
+            raise HTTPException(429, message, headers={"Retry-After": str(max(1, round(wait)))})
 
     def scans_left(user: User, now: datetime) -> int | None:
         if user.is_admin:
@@ -177,7 +241,7 @@ def create_app(
 
     def as_record(row: ScanRow, viewer: User) -> dict[str, Any]:
         record: dict[str, Any] = {
-            "id": row.id, "target": row.target, "specUrl": row.spec_url, "checks": row.checks,
+            "id": row.id, "status": "done", "target": row.target, "specUrl": row.spec_url, "checks": row.checks,
             "createdAt": row.created_at, "report": row.report,
         }
         if viewer.is_admin:
@@ -187,12 +251,52 @@ def create_app(
     def target_record(row: TargetRow, now: datetime) -> dict[str, Any]:
         record: dict[str, Any] = {
             "id": row.id, "label": row.label, "url": row.base_url, "specUrl": row.spec_url,
-            "status": row.status, "note": row.note, "createdAt": row.created_at,
+            "specName": row.spec_name, "status": row.status, "note": row.note, "createdAt": row.created_at,
+            "verifiedAt": row.verified_at,
         }
+        # How to prove control: while it waits, and for as long as a proven API is kept (the
+        # proof is checked again before each scan). Not for one an admin decided on by hand.
+        if row.status == "pending" or row.verified_at:
+            record["proof"] = {"url": proof_url(row.base_url), "line": proof_line(row.verify_token)}
         if row.status == "approved":
             used = store.count_since(_midnight_utc(now), target=row.base_url)
             record["scansLeftToday"] = max(0, config.scans_per_target_per_day - used)
         return record
+
+    def own_target_row(target_id: str, user: User) -> TargetRow:
+        row = next((t for t in store.list_targets(user.id) if t.id == target_id), None) if is_uuid(target_id) else None
+        if row is None:
+            raise HTTPException(404, "No such API.")
+        return row
+
+    def read_spec(body: SpecIn, base_url: str) -> tuple[str | None, str | None, str | None]:
+        """(spec_url, spec_name, spec_text) from a link or an upload, checked; Refused if not usable."""
+        if (body.specUrl is None) == (body.spec is None):
+            raise Refused(400, "Link the API's OpenAPI spec or upload it (one of the two).", "specUrl")
+        if body.spec is None:
+            spec_url = (body.specUrl or "").strip()
+            try:
+                spec_origin = check_user_url(spec_url)
+            except ValueError as exc:
+                raise Refused(400, f"The spec address: {exc}", "specUrl") from None
+            if spec_origin != base_url:
+                raise Refused(400, f"The spec has to be on the API's own address ({base_url}), because the server "
+                                   "downloads it with the same safety rules as the scan. Or upload the file.",
+                              "specUrl")
+            return spec_url, None, None
+        name, text = _file_name(body.spec.name), body.spec.text
+        if len(text.encode("utf-8")) > MAX_SPEC_BYTES:
+            raise Refused(400, f"The spec is larger than {MAX_SPEC_BYTES // 1_000_000} MB.", "spec")
+        try:
+            document = load_spec_text(text, name, allow_yaml_aliases=False)
+            endpoints = build_endpoints(document)
+        except SpecError as exc:
+            raise Refused(400, str(exc), "spec") from None
+        except Exception:  # noqa: BLE001 - a spec the engine can't read, whatever the reason
+            raise Refused(400, f"{name}: this file couldn't be read as an OpenAPI spec.", "spec") from None
+        if not endpoints:
+            raise Refused(400, f"{name}: the spec describes no endpoints, so there would be nothing to scan.", "spec")
+        return None, name, text
 
     def own_target(body: ScanIn, user: User, target_origin: str) -> Target | None:
         """The user's own API at this address, ready to scan, or None if they have none there."""
@@ -200,19 +304,31 @@ def create_app(
         if row is None:
             return None
         if row.status == "pending":
-            raise Refused(403, f"{row.label} is waiting for approval. You can scan it once an admin approves it.",
-                          "target")
+            raise Refused(403, f"{row.label} isn't approved yet. Prove that you control it under Your APIs, "
+                               "then scan it.", "target")
         if row.status != "approved":
             raise Refused(403, f"{row.label} wasn't approved for scanning, so it can't be scanned.", "target")
-        if body.specUrl.strip() != row.spec_url:
-            raise Refused(403, f"Scan {row.label} with the spec it was approved with: {row.spec_url}", "specUrl")
+        if body.specUrl.strip() and body.specUrl.strip() != (row.spec_url or ""):
+            raise Refused(403, f"{row.label} is set up with a different spec now "
+                               f"({row.spec_url or 'an uploaded file'}). Reload the page and try again.", "specUrl")
         tokens = {"APIFUZZ_TOKEN_A": _clean_token(body.tokenA, "tokenA"),
                   "APIFUZZ_TOKEN_B": _clean_token(body.tokenB, "tokenB")}
         if tokens["APIFUZZ_TOKEN_A"] and tokens["APIFUZZ_TOKEN_A"] == tokens["APIFUZZ_TOKEN_B"]:
             raise Refused(400, "Accounts A and B need different tokens: they have to be two different users.",
                           "tokenB")
-        return Target(id=row.id, label=row.label, base_url=row.base_url, spec_url=row.spec_url,
-                      engine_env={k: v for k, v in tokens.items() if v}, guarded=True)
+        if row.verified_at:
+            # Proven by a file on the API: it must still be there. Taking it down withdraws consent.
+            try:
+                proof_checker(row.base_url, row.verify_token)
+            except ProofMissing as exc:
+                raise Refused(403, f"The proof that you control {row.label} is gone: {exc}. Put the file back, "
+                                   "then scan again.", "target") from None
+        spec_text = store.get_spec_text(row.id, user.id) if row.spec_name else None
+        if row.spec_name and spec_text is None:
+            raise Refused(409, f"{row.label}'s uploaded spec is missing. Upload it again under Your APIs.", "target")
+        return Target(id=row.id, label=row.label, base_url=row.base_url, spec_url=row.spec_url or "",
+                      engine_env={k: v for k, v in tokens.items() if v}, guarded=True,
+                      spec_text=spec_text, spec_name=row.spec_name)
 
     def pick_target(body: ScanIn, user: User) -> Target:
         try:
@@ -237,6 +353,34 @@ def create_app(
                                f"address ({target.base_url}).", "specUrl")
         return target
 
+    def run_job(job: Job, row: ScanRow, target: Target, spec_url: str) -> None:
+        """The scan itself, on its own thread. Releases the scan lock however it ends."""
+        try:
+            try:
+                outcome = runner(target, spec_url, row.checks, config, job)
+            except ScanFailed as exc:
+                row.status, row.error, row.requests_sent = "failed", str(exc), exc.requests_sent
+                if exc.requests_sent:  # it reached the target, so it counts towards the limits
+                    store.add(row)
+                job.finish("cancelled" if job.cancelled else "failed", error=str(exc))
+                return
+            except Exception:
+                log.exception("scan %s stopped on an unexpected error", job.id)
+                row.status, row.error, row.requests_sent = "failed", "unexpected server error", job.requests_sent
+                if job.requests_sent:
+                    store.add(row)
+                job.finish("failed", error="the server hit an unexpected error. Try again later.")
+                return
+            row.report, row.requests_sent = outcome.report, outcome.requests_sent
+            store.add(row)
+            store.prune(clock() - timedelta(days=config.retention_days))
+            job.finish("done", stopped_early=outcome.stopped_early)
+        except StoreError as exc:
+            log.error("database: %s", exc)
+            job.finish("failed", error="the scan ran, but it couldn't be saved. Try again in a minute.")
+        finally:
+            scan_lock.release()
+
     @app.post("/auth/google")
     def google_sign_in(body: GoogleCodeIn, request: Request) -> dict[str, str]:
         wait = sign_in_limiter.hit(client_ip(request.scope, config.behind_proxy))
@@ -259,6 +403,7 @@ def create_app(
     @app.get("/me")
     def me(user: User = Depends(current_user)) -> dict[str, Any]:
         now = clock()
+        running = jobs.running_for(user.id)
         return {
             "email": user.email,
             "isAdmin": user.is_admin,
@@ -268,9 +413,10 @@ def create_app(
             "burst": config.burst,
             "targets": [{"id": t.id, "label": t.label, "url": t.base_url, "specUrl": t.spec_url}
                         for t in config.targets],
+            "runningScan": {"id": running.id, "label": running.label} if running else None,
         }
 
-    @app.post("/scans", status_code=201)
+    @app.post("/scans", status_code=202)
     def start_scan(body: ScanIn, user: User = Depends(current_user)) -> dict[str, Any]:
         if not body.authorized:
             raise Refused(400, "Confirm that you own this target or have written permission to test it.",
@@ -278,9 +424,12 @@ def create_app(
         target = pick_target(body, user)
         checks = in_engine_order(list(body.checks))
         if not scan_lock.acquire(timeout=config.scan_wait):
+            mine = jobs.running_for(user.id)
+            if mine is not None:
+                raise Refused(409, f"Your scan of {mine.label} is still running. Wait for it to finish, or cancel it.")
             raise Refused(503, "Another scan is running. Try again in a minute.")
         try:
-            # Counted inside the lock, so two requests at once can't both take the last scan.
+            # Counted while holding the lock, so two requests at once can't both take the last scan.
             now = clock()
             if not user.is_admin:
                 if store.count_since(_midnight_utc(now), user.id) >= config.scans_per_day:
@@ -293,22 +442,60 @@ def create_app(
                                        >= config.scans_per_target_per_day):
                     raise Refused(429, f"{target.label} has been scanned {config.scans_per_target_per_day} times "
                                        "today, the most one API may be. Try again after midnight UTC.", "limit")
-            row = ScanRow(user_id=user.id, user_email=user.email, target=target.base_url,
-                          spec_url=body.specUrl, checks=checks, status="done", requests_sent=0,
-                          created_at=now.isoformat(timespec="seconds"))
-            try:
-                outcome = runner(target, body.specUrl, checks, config)
-            except ScanFailed as exc:
-                row.status, row.error, row.requests_sent = "failed", str(exc), exc.requests_sent
-                if exc.requests_sent:  # it reached the target, so it counts towards the limits
-                    store.add(row)
-                raise Refused(502, f"The scan stopped: {exc}") from exc
-            row.report, row.requests_sent = outcome.report, outcome.requests_sent
-            store.add(row)
-            store.prune(now - timedelta(days=config.retention_days))
-            return as_record(row, user)
-        finally:
-            scan_lock.release()
+            spec_source = target.spec_url if target.spec_text is None else f"uploaded: {target.spec_name}"
+            created = now.isoformat(timespec="seconds")
+            job = Job(id=str(uuid.uuid4()), user_id=user.id, label=target.label, target=target.base_url,
+                      checks=checks, created_at=created, max_requests=config.max_requests)
+            row = ScanRow(user_id=user.id, user_email=user.email, target=target.base_url, spec_url=spec_source,
+                          checks=checks, status="done", requests_sent=0, created_at=created, id=job.id)
+            jobs.add(job)
+            spec_url = body.specUrl if target.spec_text is None and not target.guarded else target.spec_url
+            start_background(lambda: run_job(job, row, target, spec_url))
+        except BaseException:
+            scan_lock.release()  # the scan never started, so its thread won't release it
+            raise
+        log.info("scan %s started on %s by %s", job.id, target.base_url, user.id)
+        return job.view()
+
+    @app.get("/scans")
+    def list_scans(user: User = Depends(current_user)) -> list[dict[str, Any]]:
+        rows = store.list(None if user.is_admin else user.id)
+        return [as_record(r, user) for r in rows]
+
+    def visible_job(scan_id: str, user: User) -> Job | None:
+        job = jobs.get(scan_id) if is_uuid(scan_id) else None
+        return job if job is not None and (job.user_id == user.id or user.is_admin) else None
+
+    @app.get("/scans/{scan_id}")
+    def get_scan(scan_id: str, user: User = Depends(current_user)) -> dict[str, Any]:
+        job = visible_job(scan_id, user)
+        if job is not None and job.status != "done":
+            return job.view()
+        row = store.get(scan_id) if is_uuid(scan_id) else None
+        # Someone else's scan looks exactly like a missing one, so ids can't be probed.
+        if row is None or row.status != "done" or (row.user_id != user.id and not user.is_admin):
+            raise HTTPException(404, "No such scan.")
+        return as_record(row, user)
+
+    @app.get("/scans/{scan_id}/progress")
+    def scan_progress(scan_id: str, user: User = Depends(watching_user)) -> dict[str, Any]:
+        job = visible_job(scan_id, user)
+        if job is not None:
+            return job.view()
+        row = store.get(scan_id) if is_uuid(scan_id) else None
+        if row is not None and row.status == "done" and (row.user_id == user.id or user.is_admin):
+            return {"id": row.id, "status": "done"}
+        raise HTTPException(404, "No such scan. If it was running, the server may have restarted.")
+
+    @app.post("/scans/{scan_id}/cancel", status_code=202)
+    def cancel_scan(scan_id: str, user: User = Depends(current_user)) -> dict[str, Any]:
+        job = visible_job(scan_id, user)
+        if job is None:
+            raise HTTPException(404, "No such running scan.")
+        job.request_cancel()
+        if job.cancel_requested:
+            log.info("scan %s cancelled by %s", job.id, user.id)
+        return job.view()
 
     @app.get("/targets")
     def list_targets(user: User = Depends(current_user)) -> dict[str, Any]:
@@ -331,29 +518,55 @@ def create_app(
             base_url = check_user_url(body.url)
         except ValueError as exc:
             raise Refused(400, str(exc), "url") from None
-        spec_url = body.specUrl.strip()
-        try:
-            spec_origin = check_user_url(spec_url)
-        except ValueError as exc:
-            raise Refused(400, f"The spec address: {exc}", "specUrl") from None
-        if spec_origin != base_url:
-            raise Refused(400, f"The spec has to be on the API's own address ({base_url}), because the server "
-                               "downloads it with the same safety rules as the scan.", "specUrl")
         mine = store.list_targets(user.id)
         if any(t.base_url == base_url for t in mine):
             raise Refused(409, "You've already added that API.", "url")
         if not user.is_admin and len(mine) >= config.targets_per_user:
             raise Refused(429, f"You can have {config.targets_per_user} APIs at most. Remove one to add another.",
                           "limit")
+        if body.spec is not None:
+            per_user(upload_limiter, user, "Too many uploads. Wait a minute and try again.")
+        spec_url, spec_name, spec_text = read_spec(body, base_url)
         host, _, port = base_url.removeprefix("https://").partition(":")
         try:
             public_addresses(host, int(port or 443))  # an early, clear answer; every scan checks again
         except BlockedAddress as exc:
             raise Refused(400, f"{exc}. Only APIs on the public internet can be scanned.", "url") from None
         row = TargetRow(user_id=user.id, user_email=user.email, label=label, base_url=base_url,
-                        spec_url=spec_url, created_at=clock().isoformat(timespec="seconds"))
+                        spec_url=spec_url, spec_name=spec_name, spec_text=spec_text,
+                        created_at=clock().isoformat(timespec="seconds"))
         store.add_target(row)
-        log.info("target requested: %s by %s", base_url, user.id)
+        log.info("target added: %s by %s", base_url, user.id)
+        return target_record(row, clock())
+
+    @app.put("/targets/{target_id}/spec")
+    def replace_spec(target_id: str, body: SpecIn, user: User = Depends(current_user)) -> dict[str, Any]:
+        row = own_target_row(target_id, user)
+        if body.spec is not None:
+            per_user(upload_limiter, user, "Too many uploads. Wait a minute and try again.")
+        spec_url, spec_name, spec_text = read_spec(body, row.base_url)
+        if not store.set_spec(row.id, user.id, spec_url, spec_name, spec_text):
+            raise HTTPException(404, "No such API.")
+        row.spec_url, row.spec_name = spec_url, spec_name
+        return target_record(row, clock())
+
+    @app.post("/targets/{target_id}/verify")
+    def verify_target(target_id: str, user: User = Depends(current_user)) -> dict[str, Any]:
+        row = own_target_row(target_id, user)
+        if row.status == "approved":
+            return target_record(row, clock())
+        if row.status == "rejected":
+            raise Refused(403, f"An admin decided {row.label} can't be scanned, so it can't be approved this way.")
+        per_user(verify_limiter, user, "Too many checks. Wait a few minutes, then check again.")
+        try:
+            proof_checker(row.base_url, row.verify_token)
+        except ProofMissing as exc:
+            raise Refused(422, f"The proof wasn't found: {exc}.") from None
+        when = clock().isoformat(timespec="seconds")
+        if not store.mark_verified(row.id, user.id, when):
+            raise HTTPException(404, "No such API.")  # removed, or decided by an admin, meanwhile
+        row.status, row.verified_at = "approved", when
+        log.info("target verified: %s by %s", row.base_url, user.id)
         return target_record(row, clock())
 
     @app.delete("/targets/{target_id}", status_code=204)
@@ -362,19 +575,6 @@ def create_app(
         if not is_uuid(target_id) or not store.delete_target(target_id, user.id):
             raise HTTPException(404, "No such API.")
 
-    @app.get("/scans")
-    def list_scans(user: User = Depends(current_user)) -> list[dict[str, Any]]:
-        rows = store.list(None if user.is_admin else user.id)
-        return [as_record(r, user) for r in rows]
-
-    @app.get("/scans/{scan_id}")
-    def get_scan(scan_id: str, user: User = Depends(current_user)) -> dict[str, Any]:
-        row = store.get(scan_id) if is_uuid(scan_id) else None
-        # Someone else's scan looks exactly like a missing one, so ids can't be probed.
-        if row is None or row.status != "done" or (row.user_id != user.id and not user.is_admin):
-            raise HTTPException(404, "No such scan.")
-        return as_record(row, user)
-
     @app.exception_handler(StoreError)
     async def store_down(_: Request, exc: StoreError) -> JSONResponse:
         log.error("database: %s", exc)
@@ -382,4 +582,3 @@ def create_app(
                             status_code=503)
 
     return app
-

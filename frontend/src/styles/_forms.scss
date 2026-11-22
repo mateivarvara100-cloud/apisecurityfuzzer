@@ -372,8 +372,8 @@
   }
 }
 
-// While a scan runs: the mark's cursor blinks beside the status, and a terminal-style feed of
-// requests scrolls underneath (RequestTicker).
+// While a scan runs: the mark's cursor blinks beside the status, and a terminal-style feed of the
+// scan server's latest requests scrolls underneath (ScanProgress).
 .running {
   display: grid;
   gap: 14px;

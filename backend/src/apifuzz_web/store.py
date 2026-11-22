@@ -7,6 +7,7 @@ key, and it decides who sees what: a user their own rows, an admin every scan.
 """
 
 import builtins  # the stores have a `list` method, which hides the built-in inside their bodies
+import secrets
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -33,16 +34,26 @@ class ScanRow:
 
 @dataclass
 class TargetRow:
-    """A user's own API. `status` is changed only by an admin, in the Supabase table editor."""
+    """A user's own API.
+
+    It starts "pending". It becomes "approved" when the user proves control of it (the token in
+    a file on the API, see proof.py), which sets `verified_at`, or when an admin approves it by
+    hand in the Supabase table editor. Only an admin rejects one.
+    """
 
     user_id: str
     user_email: str
     label: str
     base_url: str  # an https origin, from netguard.check_user_url
-    spec_url: str  # on the same origin
+    spec_url: str | None  # on the same origin; None when the spec was uploaded instead
     created_at: str  # UTC, ISO 8601
     status: str = "pending"  # "pending", "approved" or "rejected"
     note: str | None = None  # the admin's note to the user
+    verify_token: str = field(default_factory=lambda: secrets.token_hex(16))
+    verified_at: str | None = None  # when the proof was first found; None if approved by hand
+    spec_name: str | None = None  # the uploaded spec's file name; set exactly when one was uploaded
+    # The uploaded spec itself. Only written and read on its own (get_spec_text): lists leave it out.
+    spec_text: str | None = field(default=None, repr=False)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
 
@@ -61,6 +72,10 @@ class Store(Protocol):
     def add_target(self, row: TargetRow) -> None: ...
     def list_targets(self, user_id: str) -> builtins.list[TargetRow]: ...
     def delete_target(self, target_id: str, user_id: str) -> bool: ...
+    def mark_verified(self, target_id: str, user_id: str, when: str) -> bool: ...
+    def set_spec(self, target_id: str, user_id: str, spec_url: str | None, spec_name: str | None,
+                 spec_text: str | None) -> bool: ...
+    def get_spec_text(self, target_id: str, user_id: str) -> str | None: ...
 
 
 def is_uuid(value: str) -> bool:
@@ -115,7 +130,8 @@ class MemoryStore:
 
     def list_targets(self, user_id: str) -> builtins.list[TargetRow]:
         with self._lock:
-            rows = [t for t in self._targets if t.user_id == user_id]
+            # Copies without the spec text, like the database's list.
+            rows = [TargetRow(**{**asdict(t), "spec_text": None}) for t in self._targets if t.user_id == user_id]
         return sorted(rows, key=lambda t: t.created_at)
 
     def delete_target(self, target_id: str, user_id: str) -> bool:
@@ -123,6 +139,27 @@ class MemoryStore:
             before = len(self._targets)
             self._targets = [t for t in self._targets if not (t.id == target_id and t.user_id == user_id)]
             return len(self._targets) < before
+
+    def mark_verified(self, target_id: str, user_id: str, when: str) -> bool:
+        with self._lock:
+            for t in self._targets:
+                if t.id == target_id and t.user_id == user_id and t.status == "pending":
+                    t.status, t.verified_at = "approved", when
+                    return True
+        return False
+
+    def set_spec(self, target_id: str, user_id: str, spec_url: str | None, spec_name: str | None,
+                 spec_text: str | None) -> bool:
+        with self._lock:
+            for t in self._targets:
+                if t.id == target_id and t.user_id == user_id:
+                    t.spec_url, t.spec_name, t.spec_text = spec_url, spec_name, spec_text
+                    return True
+        return False
+
+    def get_spec_text(self, target_id: str, user_id: str) -> str | None:
+        with self._lock:
+            return next((t.spec_text for t in self._targets if t.id == target_id and t.user_id == user_id), None)
 
     def set_status(self, target_id: str, status: str, note: str | None = None) -> None:
         """What an admin does in the table editor; only tests and local work call it."""
@@ -137,7 +174,8 @@ class SupabaseStore:
 
     kind = "supabase"
     _COLUMNS = "id,user_id,user_email,target,spec_url,checks,status,requests_sent,created_at,report,error"
-    _TARGET_COLUMNS = "id,user_id,user_email,label,base_url,spec_url,status,note,created_at"
+    # Everything but spec_text, which can be large and is read only when a scan needs it.
+    _TARGET_COLUMNS = "id,user_id,user_email,label,base_url,spec_url,status,note,created_at,verify_token,verified_at,spec_name"
 
     def __init__(self, supabase_url: str, secret_key: str, transport: httpx.BaseTransport | None = None) -> None:
         # The secret key goes in `apikey` only; Supabase then runs the request as the service role.
@@ -197,6 +235,31 @@ class SupabaseStore:
             return False
         # Both conditions in one request: someone else's target is never touched.
         response = self._check(self._http.delete(
-            "/targets", params={"id": f"eq.{target_id}", "user_id": f"eq.{user_id}"},
+            "/targets", params={"id": f"eq.{target_id}", "user_id": f"eq.{user_id}", "select": "id"},
             headers={"Prefer": "return=representation"}))
         return bool(response.json())
+
+    def _update_own(self, target_id: str, user_id: str, values: dict[str, Any], **conditions: str) -> bool:
+        """Change the owner's own target; True if one matched. The table grants only these columns."""
+        if not is_uuid(target_id):
+            return False
+        params = {"id": f"eq.{target_id}", "user_id": f"eq.{user_id}", "select": "id", **conditions}
+        response = self._check(self._http.patch("/targets", params=params, json=values,
+                                                headers={"Prefer": "return=representation"}))
+        return bool(response.json())
+
+    def mark_verified(self, target_id: str, user_id: str, when: str) -> bool:
+        # Only a pending target: one an admin rejected stays rejected.
+        return self._update_own(target_id, user_id, {"status": "approved", "verified_at": when}, status="eq.pending")
+
+    def set_spec(self, target_id: str, user_id: str, spec_url: str | None, spec_name: str | None,
+                 spec_text: str | None) -> bool:
+        return self._update_own(target_id, user_id,
+                                {"spec_url": spec_url, "spec_name": spec_name, "spec_text": spec_text})
+
+    def get_spec_text(self, target_id: str, user_id: str) -> str | None:
+        if not is_uuid(target_id):
+            return None
+        rows = self._check(self._http.get("/targets", params={
+            "id": f"eq.{target_id}", "user_id": f"eq.{user_id}", "select": "spec_text"})).json()
+        return rows[0]["spec_text"] if rows else None

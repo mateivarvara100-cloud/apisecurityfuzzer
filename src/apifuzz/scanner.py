@@ -10,6 +10,7 @@ does not apply to. A report with no findings is only good news if something was 
 """
 
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
@@ -48,7 +49,26 @@ class ScanResult(BaseModel):
     incomplete: bool = False  # True when the scan stopped early (request limit reached)
 
 
-def run_scan(endpoints: list[Endpoint], checks: list[type[Check]], ctx: ScanContext) -> ScanResult:
+# Called before each (check, endpoint) step with the check's id, the step's number (from 0) and
+# the number of steps in the whole scan.
+StepHook = Callable[[str, int, int], None]
+
+
+def run_scan(
+    endpoints: list[Endpoint],
+    checks: list[type[Check]],
+    ctx: ScanContext,
+    *,
+    on_step: StepHook | None = None,
+    should_stop: Callable[[], str | None] | None = None,
+) -> ScanResult:
+    """Run every check on every endpoint.
+
+    `on_step` reports progress. `should_stop` is asked before each step; when it returns a reason,
+    the scan ends there, between two steps, so no check is cut off halfway (a check that created
+    test data has deleted it again). What was found so far is kept and the result is marked
+    incomplete, as when the request limit is reached.
+    """
     started = time.perf_counter()
     result = ScanResult(
         checks_run=[c.id for c in checks],
@@ -58,12 +78,22 @@ def run_scan(endpoints: list[Endpoint], checks: list[type[Check]], ctx: ScanCont
     )
     if not ctx.endpoints:
         ctx.endpoints = endpoints  # let checks see the whole scan (e.g. bola's id recon)
+    total = len(checks) * len(endpoints)
+    step = 0
     try:
         for check_cls in checks:
             check = check_cls()
             coverage = Coverage(check=check.id)
             result.coverage.append(coverage)
             for endpoint in endpoints:
+                reason = should_stop() if should_stop else None
+                if reason:
+                    result.errors.append(f"scan stopped early: {reason}")
+                    result.incomplete = True
+                    raise _Stopped
+                if on_step:
+                    on_step(check.id, step, total)
+                step += 1
                 label = f"{endpoint.method} {endpoint.path}"
                 try:
                     result.findings.extend(check.run(endpoint, ctx))
@@ -77,6 +107,8 @@ def run_scan(endpoints: list[Endpoint], checks: list[type[Check]], ctx: ScanCont
         # The request budget ran out. Keep what was found so far, but say the scan is partial.
         result.errors.append(f"scan stopped early: {exc}")
         result.incomplete = True
+    except _Stopped:
+        pass  # asked to stop (should_stop); already noted above
     # Anything a check created on the target and could not remove again is said out loud.
     result.errors.extend(f"left behind on the target: {line}" for line in ctx.leftovers)
     # Stable sort: worst severity first, ties keep the order the checks produced them in.
@@ -84,6 +116,10 @@ def run_scan(endpoints: list[Endpoint], checks: list[type[Check]], ctx: ScanCont
     result.requests_sent = ctx.client.requests_sent
     result.duration_s = round(time.perf_counter() - started, 2)
     return result
+
+
+class _Stopped(Exception):
+    """Internal: leaves both loops at once when should_stop asks the scan to end."""
 
 
 def _count(coverage: Coverage, label: str, outcome: tuple[str, str] | None) -> None:

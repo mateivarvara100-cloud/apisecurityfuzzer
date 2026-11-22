@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { CHECKS } from "../api/checks";
-import { API_MODE, LAB } from "../api/config";
+import { LAB } from "../api/config";
 import { precheck, ScanRefused, scans, targets as targetService, type Limits } from "../api/service";
 import type { CheckId, OwnTarget } from "../api/types";
 import { useSession } from "../auth/session";
 import { plural } from "../lib/format";
-import { Mark } from "../components/Mark";
-import { RequestTicker } from "../components/RequestTicker";
 import { FuzzText } from "../components/FuzzText";
 
 type Field = ScanRefused["field"];
@@ -29,8 +27,7 @@ export function NewScan() {
   const [tokenB, setTokenB] = useState("");
   const [authorized, setAuthorized] = useState(false);
   const [error, setError] = useState<{ message: string; field?: Field } | null>(null);
-  const [running, setRunning] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
+  const [running, setRunning] = useState(false); // starting: the server answers at once
   const [limits, setLimits] = useState<Limits | null>(null);
 
   const token = session?.accessToken ?? "";
@@ -64,13 +61,6 @@ export function NewScan() {
     if (selected !== LAB_ID && own.length > 0 && !approved.some((t) => t.id === selected)) setSelected(LAB_ID);
   }, [own, approved, selected]);
 
-  useEffect(() => {
-    if (!running) return;
-    const start = Date.now();
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 250);
-    return () => clearInterval(id);
-  }, [running]);
-
   function choose(id: string) {
     setSelected(id);
     if (error?.field === "target" || error?.field === "specUrl" || error?.field === "limit") setError(null);
@@ -87,7 +77,8 @@ export function NewScan() {
     const target = chosen ?? LAB;
     const req = {
       target: target.url,
-      specUrl: target.specUrl,
+      // A user's own API is scanned with the spec stored with it (a link, or an uploaded file).
+      specUrl: target.specUrl ?? "",
       checks,
       authorized,
       ...(isOwn ? { tokenA: tokenA.trim() || undefined, tokenB: tokenB.trim() || undefined } : {}),
@@ -98,11 +89,11 @@ export function NewScan() {
       return;
     }
     setError(null);
-    setElapsed(0);
     setRunning(true);
     try {
-      const record = await scans.startScan(req, token);
-      navigate(`/scans/${record.id}`);
+      // The scan runs in the background; its page shows the progress, then the report.
+      const job = await scans.startScan(req, token);
+      navigate(`/scans/${job.id}`);
     } catch (err) {
       setError(
         err instanceof ScanRefused
@@ -124,6 +115,7 @@ export function NewScan() {
     [hint, error?.field === field ? `${field}-error` : undefined].filter(Boolean).join(" ") || undefined;
   const noneLeft = limits?.left === 0;
   const targetSpent = chosen?.scansLeftToday === 0;
+  const busy = limits?.running ?? null; // this account's scan that hasn't finished yet
 
   return (
     <>
@@ -286,20 +278,16 @@ export function NewScan() {
           {errorFor("authorized")}
         </div>
 
+        {busy && (
+          <p className="notice" role="status">
+            Your scan of {busy.label} is still running. <Link to={`/scans/${busy.id}`}>Watch its progress</Link>; you
+            can start another once it's done.
+          </p>
+        )}
         <div className="scan-form__submit">
-          {running ? (
-            <div className="running">
-              <p className="running__status" role="status">
-                <Mark className="running__mark" />
-                Scanning {chosen?.label ?? LAB.label}, {plural(elapsed, "second")} so far
-              </p>
-              {API_MODE === "mock" && <RequestTicker checks={checks} />}
-            </div>
-          ) : (
-            <button className="button" type="submit" disabled={noneLeft || targetSpent}>
-              Start scan
-            </button>
-          )}
+          <button className="button" type="submit" disabled={running || noneLeft || targetSpent || !!busy}>
+            {running ? "Starting…" : "Start scan"}
+          </button>
           {limits && !running && (
             <span className="scan-form__limits">
               {noneLeft

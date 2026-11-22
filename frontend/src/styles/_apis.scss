@@ -180,3 +180,122 @@
   border-left-color: var(--ok);
   background: var(--surface);
 }
+
+// ---- a spec: linked or uploaded ----
+.spec-input {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+
+  &__modes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+  }
+
+  &__mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--t-sm);
+    cursor: pointer;
+
+    input {
+      accent-color: var(--accent);
+    }
+  }
+
+  &__file {
+    padding: 8px;
+    cursor: pointer;
+
+    &::file-selector-button {
+      font: inherit;
+      color: var(--ink);
+      background: var(--surface-2);
+      border: 1px solid var(--rule-strong);
+      border-radius: var(--radius);
+      padding: 6px 12px;
+      margin-right: 12px;
+      cursor: pointer;
+    }
+  }
+}
+
+// ---- extra rows under one API: proving it, changing its spec ----
+.api-list__spec {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+
+  code {
+    @include mono;
+    overflow-wrap: anywhere;
+  }
+}
+
+.api-list__panel {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+}
+
+.api-form--inline {
+  margin-top: 0;
+  padding: 16px;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+
+.api-form__buttons {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+// How to prove control: a numbered list on a surface, the line to publish in mono with Copy.
+.proof {
+  padding: 16px;
+  background: var(--surface);
+  border-left: 3px solid var(--rule-strong);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 12px;
+
+  &__title {
+    font-weight: 600;
+  }
+
+  &__steps {
+    margin: 0;
+    padding-left: 20px;
+    display: grid;
+    gap: 10px;
+    font-size: var(--t-sm);
+  }
+
+  &__url {
+    @include mono;
+    overflow-wrap: anywhere;
+  }
+
+  &__line {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    margin-left: 4px;
+
+    code {
+      @include mono;
+      background: #0d0d10;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      padding: 4px 8px;
+      overflow-wrap: anywhere;
+    }
+  }
+}

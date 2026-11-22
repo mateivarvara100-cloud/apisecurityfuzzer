@@ -2,9 +2,10 @@
 // sign-in goes through Supabase: Google OAuth, or e-mail and password. Without one it is simulated,
 // so the UI can be worked on. Pages see the same shape either way.
 //
-// There is no sign-up. Who may sign in is decided outside the browser: turn off new sign-ups in
-// Supabase (so a Google account that isn't already a user is refused), and have the backend check
-// the e-mail in the access token. Nothing here can enforce it.
+// Sign-up is open (the sign-up page, or Google). What an account may do is decided by the backend,
+// never here: it verifies the access token on every request, reads the role (user or admin) from
+// the token's app_metadata, which users can't edit, and applies the limits. Nothing in the
+// browser can enforce any of that.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Session as SupabaseSession } from "@supabase/supabase-js";

@@ -5,6 +5,7 @@ someone hammering the API with cheap requests, or sending a huge body to tie up 
 """
 
 import json
+import re
 import threading
 import time
 from collections import deque
@@ -81,13 +82,22 @@ SECURITY_HEADERS = [
 ]
 
 
+# The only requests that may carry more than a small JSON body: the ones that upload a spec.
+_UPLOADS = re.compile(r"^(POST /targets|PUT /targets/[0-9a-fA-F-]{36}/spec)$")
+
+
 class Guards:
     """ASGI middleware: per-IP rate limit, body size cap, security headers on every answer."""
 
     def __init__(
-        self, app: ASGIApp, *, ip_limiter: RateLimiter, max_body: int = 16_384, behind_proxy: bool = False
+        self, app: ASGIApp, *, ip_limiter: RateLimiter, max_body: int = 16_384, max_upload: int = 1_500_000,
+        behind_proxy: bool = False,
     ) -> None:
-        self.app, self.ip_limiter, self.max_body, self.behind_proxy = app, ip_limiter, max_body, behind_proxy
+        self.app, self.ip_limiter, self.behind_proxy = app, ip_limiter, behind_proxy
+        self.max_body, self.max_upload = max_body, max_upload
+
+    def _cap(self, scope: Scope) -> int:
+        return self.max_upload if _UPLOADS.match(f"{scope['method']} {scope.get('path', '')}") else self.max_body
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -106,8 +116,9 @@ class Guards:
                 await _reply(send_with_headers, 429, "Too many requests. Wait a moment and try again.", wait)
                 return
 
+        cap = self._cap(scope)
         declared = dict(scope.get("headers", [])).get(b"content-length")
-        if declared is not None and (not declared.isdigit() or int(declared) > self.max_body):
+        if declared is not None and (not declared.isdigit() or int(declared) > cap):
             await _reply(send_with_headers, 413, "The request is too large.")
             return
 
@@ -119,7 +130,7 @@ class Guards:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_body:
+                if received > cap:
                     # Raised inside the route's body parsing, so FastAPI turns it into a 413 answer.
                     raise HTTPException(413, "The request is too large.")
             return message

@@ -1,5 +1,6 @@
 import importlib.util
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -10,7 +11,8 @@ from fastapi.testclient import TestClient
 from apifuzz_web.app import create_app
 from apifuzz_web.auth import AuthError, User
 from apifuzz_web.config import Config, Target
-from apifuzz_web.engine import ScanFailed, ScanOutcome
+from apifuzz_web.engine import Progress, ScanFailed, ScanOutcome
+from apifuzz_web.proof import ProofMissing
 from apifuzz_web.store import MemoryStore
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,7 +47,8 @@ class FakeRunner:
         self.block: threading.Event | None = None
         self.started = threading.Event()
 
-    def __call__(self, target: Target, spec_url: str, checks: list[str], config: Config) -> ScanOutcome:
+    def __call__(self, target: Target, spec_url: str, checks: list[str], config: Config,
+                 progress: Progress) -> ScanOutcome:
         self.calls.append((target.base_url, spec_url, checks))
         self.started.set()
         if self.block:
@@ -78,11 +81,35 @@ def clock():
     return now
 
 
+class FakeProof:
+    """Stands in for fetching the proof file: the (base_url, token) pairs that are "published"."""
+
+    def __init__(self) -> None:
+        self.published: set[tuple[str, str]] = set()
+        self.checked: list[str] = []
+
+    def __call__(self, base_url: str, token: str) -> None:
+        self.checked.append(base_url)
+        if (base_url, token) not in self.published:
+            raise ProofMissing(f"{base_url}/.well-known/apifuzz-verify.txt answered HTTP 404")
+
+
 @pytest.fixture
-def make_client(runner, store, clock):
-    def _make(**overrides) -> TestClient:
+def proof() -> FakeProof:
+    return FakeProof()
+
+
+def run_now(work) -> None:
+    """Runs a scan's background work at once, so a test sees it finished when POST returns."""
+    work()
+
+
+@pytest.fixture
+def make_client(runner, store, clock, proof):
+    def _make(start_background=run_now, use_runner=None, **overrides) -> TestClient:
         app = create_app(make_config(**overrides), store=store, verifier=FakeVerifier(),  # type: ignore[arg-type]
-                         runner=runner, clock=lambda: clock[0])
+                         runner=use_runner or runner, clock=lambda: clock[0], start_background=start_background,
+                         proof_checker=proof)
         return TestClient(app)
 
     return _make
@@ -97,6 +124,29 @@ def scan_body(**overrides) -> dict:
     body = {"target": LAB, "specUrl": f"{LAB}/openapi.json", "checks": ["bola", "injection"], "authorized": True}
     body.update(overrides)
     return body
+
+
+def start(client: TestClient, who: str = "alice", **overrides):
+    """POST /scans. With the default client the scan has already finished when this returns."""
+    return client.post("/scans", json=scan_body(**overrides), headers=auth(who))
+
+
+def wait_for(client: TestClient, scan_id: str, status: str, who: str = "alice", within: float = 5.0) -> dict | None:
+    """Poll a background scan's progress until it reaches `status`; its view, or None in time."""
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        view = client.get(f"/scans/{scan_id}/progress", headers=auth(who)).json()
+        if view.get("status") == status:
+            return view
+        time.sleep(0.02)
+    return None
+
+
+def finished(client: TestClient, who: str = "alice", **overrides) -> dict:
+    """Start a scan, check it was accepted, and return what GET /scans/{id} says afterwards."""
+    r = start(client, who, **overrides)
+    assert r.status_code == 202, r.json()
+    return client.get(f"/scans/{r.json()['id']}", headers=auth(who)).json()
 
 
 # The real VulnShop lab on a free local port, for end-to-end scans through the real engine.

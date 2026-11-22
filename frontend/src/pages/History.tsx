@@ -52,11 +52,16 @@ export function History() {
                 <th scope="col" className="num">
                   Took
                 </th>
+                <th scope="col">
+                  <span className="visually-hidden">Compare</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {list.map((s) => {
+              {list.map((s, i) => {
                 const counts = countBySeverity(s.report.findings);
+                // The list is newest first: the next scan of the same target is the one before this.
+                const before = list.slice(i + 1).find((o) => o.target === s.target);
                 return (
                   <tr key={s.id}>
                     <td>
@@ -79,6 +84,16 @@ export function History() {
                       )}
                     </td>
                     <td className="num">{seconds(s.report.duration_s)}</td>
+                    <td>
+                      {before && (
+                        <Link
+                          to={`/compare?base=${encodeURIComponent(before.id)}&head=${encodeURIComponent(s.id)}`}
+                          aria-label={`Compare the scan of ${dateTime(s.createdAt)} with the one before it`}
+                        >
+                          Compare
+                        </Link>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

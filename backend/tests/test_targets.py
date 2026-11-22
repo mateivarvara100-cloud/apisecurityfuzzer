@@ -1,4 +1,7 @@
-"""Users' own APIs: adding one, approval, who sees what, and scanning it with two test tokens."""
+"""Users' own APIs: adding one, approval by hand, who sees what, and scanning it with two test tokens.
+
+The self-service proof and spec uploads are in test_proof_upload.py.
+"""
 
 import json
 import logging
@@ -10,7 +13,7 @@ import pytest
 from apifuzz_web import app as app_module
 from apifuzz_web import netguard
 from apifuzz_web.config import Config, Target
-from apifuzz_web.engine import ScanOutcome
+from apifuzz_web.engine import Progress, ScanOutcome
 from conftest import ALICE, auth
 
 API = "https://api.example.com"
@@ -40,7 +43,8 @@ class RecordingRunner:
     def __init__(self) -> None:
         self.targets: list[Target] = []
 
-    def __call__(self, target: Target, spec_url: str, checks: list[str], config: Config) -> ScanOutcome:
+    def __call__(self, target: Target, spec_url: str, checks: list[str], config: Config,
+                 progress: Progress) -> ScanOutcome:
         self.targets.append(target)
         return ScanOutcome(report={"findings": [], "coverage": [], "checks_run": checks}, requests_sent=20)
 
@@ -57,7 +61,7 @@ def add(client, who="alice", **overrides):
 
 
 def approve(store, url=API, status="approved", note=None):
-    for t in store._targets:  # what an admin does in the Supabase table editor
+    for t in store._targets:  # what an admin does by hand in the Supabase table editor
         if t.base_url == url:
             store.set_status(t.id, status, note)
 
@@ -148,7 +152,7 @@ def test_removing_your_own_api(client):
 def test_a_pending_or_rejected_api_cant_be_scanned(client, store, runner):
     add(client)
     r = scan(client)
-    assert r.status_code == 403 and "waiting for approval" in r.json()["detail"]
+    assert r.status_code == 403 and "isn't approved yet" in r.json()["detail"]
     approve(store, status="rejected", note="Not your domain")
     r = scan(client)
     assert r.status_code == 403 and "wasn't approved" in r.json()["detail"]
@@ -167,11 +171,19 @@ def test_an_approved_api_is_scanned_guarded_with_the_two_tokens(client, store, r
     add(client)
     approve(store)
     r = scan(client, tokenA=f"Bearer {TOKEN_A}")
-    assert r.status_code == 201, r.json()
+    assert r.status_code == 202, r.json()
     (target,) = runner.targets
     assert target.guarded is True and target.base_url == API and target.spec_url == SPEC
     assert target.engine_env == {"APIFUZZ_TOKEN_A": TOKEN_A, "APIFUZZ_TOKEN_B": TOKEN_B}
     assert target.health_url == ""
+    assert target.spec_text is None  # linked, not uploaded
+
+
+def test_an_api_approved_by_hand_needs_no_proof_file(client, store, proof):
+    add(client)
+    approve(store)
+    assert scan(client).status_code == 202
+    assert proof.checked == []
 
 
 def test_the_tokens_are_never_stored_returned_or_logged(client, store, caplog):
@@ -179,7 +191,7 @@ def test_the_tokens_are_never_stored_returned_or_logged(client, store, caplog):
     approve(store)
     with caplog.at_level(logging.DEBUG):
         r = scan(client)
-    assert r.status_code == 201
+    assert r.status_code == 202
     stored = json.dumps([asdict(row) for row in store._rows]) + json.dumps([asdict(t) for t in store._targets])
     for token in (TOKEN_A, TOKEN_B):
         assert token not in stored
@@ -190,7 +202,7 @@ def test_the_tokens_are_never_stored_returned_or_logged(client, store, caplog):
 def test_a_scan_without_tokens_runs_without_accounts(client, store, runner):
     add(client)
     approve(store)
-    assert scan(client, tokenA=None, tokenB="  ").status_code == 201
+    assert scan(client, tokenA=None, tokenB="  ").status_code == 202
     assert runner.targets[0].engine_env == {}
 
 
@@ -198,7 +210,7 @@ def test_a_scan_without_tokens_runs_without_accounts(client, store, runner):
     ({"tokenB": TOKEN_A}, "tokenB", "different tokens"),
     ({"tokenA": "abc def"}, "tokenA", "can't carry"),
     ({"tokenA": "abc\r\nX-Injected: 1"}, "tokenA", "can't carry"),
-    ({"specUrl": f"{API}/other-spec.json"}, "specUrl", "approved with"),
+    ({"specUrl": f"{API}/other-spec.json"}, "specUrl", "different spec"),
 ])
 def test_bad_tokens_or_another_spec_are_refused(client, store, runner, overrides, field, says):
     add(client)
@@ -220,7 +232,7 @@ def test_an_api_is_scanned_at_most_three_times_a_day_whoever_asks(client, store)
     add(client, who="bob")  # the same API, added by a second account
     approve(store)
     for _ in range(3):
-        assert scan(client).status_code == 201
+        assert scan(client).status_code == 202
     listed = client.get("/targets", headers=auth("alice")).json()["targets"]
     assert listed[0]["scansLeftToday"] == 0
     r = scan(client, who="bob")
@@ -238,6 +250,6 @@ def test_the_lab_still_ignores_tokens(client, runner):
     from conftest import LAB
     r = client.post("/scans", headers=auth("alice"), json={
         "target": LAB, "specUrl": f"{LAB}/openapi.json", "checks": ["bola"], "authorized": True, "tokenA": TOKEN_A})
-    assert r.status_code == 201
+    assert r.status_code == 202
     assert runner.targets[0].guarded is False and "APIFUZZ_TOKEN_A" not in runner.targets[0].engine_env
 

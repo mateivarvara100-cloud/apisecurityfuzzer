@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { useSession } from "./auth/session";
 import { Layout } from "./components/Layout";
+import { Compare } from "./pages/Compare";
 import { History } from "./pages/History";
 import { Privacy, Terms } from "./pages/Legal";
 import { NewScan } from "./pages/NewScan";
@@ -60,6 +61,14 @@ export function App() {
           element={
             <RequireSession>
               <YourApis />
+            </RequireSession>
+          }
+        />
+        <Route
+          path="compare"
+          element={
+            <RequireSession>
+              <Compare />
             </RequireSession>
           }
         />
