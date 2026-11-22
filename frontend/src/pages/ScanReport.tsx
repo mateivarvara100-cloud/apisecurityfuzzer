@@ -19,13 +19,19 @@ function previousOf(record: ScanRecord, history: ScanRecord[]): ScanRecord | nul
   return older[0] ?? null;
 }
 
+/** The server's reason as a sentence: a capital letter (unless it starts with an address) and a full stop. */
+function sentence(text: string): string {
+  const t = /^https?:\/\//i.test(text) ? text : text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
 function Ended({ job }: { job: ScanJob }) {
   const cancelled = job.status === "cancelled";
   return (
     <div className="empty">
       <h1 className="empty__title">{cancelled ? "The scan was cancelled" : "The scan stopped"}</h1>
       <p className="empty__text">
-        {job.error ? job.error.charAt(0).toUpperCase() + job.error.slice(1) : "It ended without a report."}{" "}
+        {job.error ? sentence(job.error) : "It ended without a report."}{" "}
         {job.progress.requestsSent > 0
           ? "It had reached the target, so it counts towards today's scans."
           : "Nothing was sent to the target, so it doesn't count towards today's scans."}{" "}

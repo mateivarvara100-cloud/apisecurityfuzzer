@@ -24,6 +24,9 @@ import type {
 
 export const SAMPLE_REPORT = sample as Report;
 
+/** Where the proof of control is published; never a spec. */
+const PROOF_PATH = "/.well-known/apifuzz-verify.txt";
+
 /** The largest spec that can be uploaded, as the server counts it (UTF-8 bytes). */
 export const MAX_SPEC_BYTES = 1_000_000;
 
@@ -135,6 +138,9 @@ export function precheckSpec(src: SpecSource, origin: string | null): ScanRefuse
   }
   const spec = parse((src.specUrl ?? "").trim());
   if (!spec) return new ScanRefused("Enter the address of the API's OpenAPI spec, or upload the file.", "specUrl");
+  if (spec.pathname === PROOF_PATH) {
+    return new ScanRefused("That's the proof file's address, not the spec. Link the OpenAPI spec (often /openapi.json), or upload it.", "specUrl");
+  }
   if (origin && spec.origin !== origin) {
     return new ScanRefused(
       `The spec has to be on the API's own address (${origin}), because the server downloads it with the same safety rules as the scan. Or upload the file.`,

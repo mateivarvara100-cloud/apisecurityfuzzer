@@ -27,6 +27,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from apifuzz import __version__ as engine_version
 from apifuzz.endpoint_model import build_endpoints
@@ -46,7 +47,7 @@ from apifuzz_web.google import GoogleCodeExchange, GoogleSignInError, GoogleUnav
 from apifuzz_web.guards import Guards, RateLimiter, client_ip
 from apifuzz_web.jobs import Job, JobBoard
 from apifuzz_web.netguard import BlockedAddress, check_user_url, public_addresses
-from apifuzz_web.proof import ProofMissing, check_proof, proof_line, proof_url
+from apifuzz_web.proof import PROOF_PATH, ProofMissing, check_proof, proof_line, proof_url
 from apifuzz_web.store import MemoryStore, ScanRow, Store, StoreError, SupabaseStore, TargetRow, is_uuid
 
 log = logging.getLogger("apifuzz_web")
@@ -283,6 +284,9 @@ def create_app(
                 raise Refused(400, f"The spec has to be on the API's own address ({base_url}), because the server "
                                    "downloads it with the same safety rules as the scan. Or upload the file.",
                               "specUrl")
+            if urlsplit(spec_url).path == PROOF_PATH:
+                raise Refused(400, "That's the proof file's address, not the spec. Link the OpenAPI spec (often "
+                                   "/openapi.json), or upload it.", "specUrl")
             return spec_url, None, None
         name, text = _file_name(body.spec.name), body.spec.text
         if len(text.encode("utf-8")) > MAX_SPEC_BYTES:

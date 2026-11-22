@@ -215,6 +215,15 @@ def test_the_spec_can_be_replaced_by_a_link_or_a_new_upload(client, store, runne
     assert r.status_code == 400 and r.json()["field"] == "specUrl"
 
 
+def test_the_proof_file_is_never_taken_as_the_spec(client):
+    proof_address = f"{API}/.well-known/apifuzz-verify.txt"
+    r = add(client, specUrl=proof_address)
+    assert r.status_code == 400 and r.json()["field"] == "specUrl" and "proof file" in r.json()["detail"]
+    t = add(client).json()
+    r = client.put(f"/targets/{t['id']}/spec", headers=auth("alice"), json={"specUrl": proof_address})
+    assert r.status_code == 400 and "proof file" in r.json()["detail"]
+
+
 def test_only_the_owner_can_replace_a_spec(client):
     t = add(client).json()
     assert client.put(f"/targets/{t['id']}/spec", headers=auth("bob"), json=upload()).status_code == 404
