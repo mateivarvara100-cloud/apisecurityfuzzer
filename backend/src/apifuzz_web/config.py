@@ -5,6 +5,7 @@ user sends can add a target: a scan request can only name one of the targets con
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -58,8 +59,9 @@ class Config:
     requests_per_minute_ip: int = 60  # any request, per caller address
     requests_per_minute_user: int = 30  # signed-in requests, per account
     wake_timeout: float = 30.0  # seconds a scan waits for the target's health address to answer
-    # True on Render: the caller's address is the last X-Forwarded-For entry, added by its proxy.
-    behind_proxy: bool = False
+    # The header the proxy in front sets to the caller's address, overwriting any sent by the
+    # caller (Render: cf-connecting-ip, from Cloudflare). None: use the connection's address.
+    client_ip_header: str | None = None
     # Google sign-in from the web app's own button: the OAuth web client and its secret.
     google_client_id: str | None = None
     google_client_secret: str | None = field(default=None, repr=False)
@@ -100,6 +102,19 @@ def _lab(env: dict[str, str]) -> Target:
                   health_url=f"{base}/health")
 
 
+def _client_ip_header(env: dict[str, str]) -> str | None:
+    if (env.get("BEHIND_PROXY") or "").strip():
+        # Refused rather than ignored: ignoring it would quietly put every caller under one limit.
+        raise ConfigError("BEHIND_PROXY is gone: X-Forwarded-For can be forged on Render. Set CLIENT_IP_HEADER "
+                          "to the header your proxy sets itself (cf-connecting-ip on Render) and remove BEHIND_PROXY")
+    name = (env.get("CLIENT_IP_HEADER") or "").strip().lower()
+    if name and not re.fullmatch(r"[a-z0-9-]+", name):
+        raise ConfigError(f"CLIENT_IP_HEADER must be a header name, got {name!r}")
+    if name == "x-forwarded-for":
+        raise ConfigError("CLIENT_IP_HEADER can't be x-forwarded-for: callers can forge it")
+    return name or None
+
+
 def load_config(env: dict[str, str] | None = None) -> Config:
     if env is None:
         env = {**load_dotenv(), **os.environ}
@@ -126,7 +141,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         requests_per_minute_ip=_int(env, "REQUESTS_PER_MINUTE_IP", 60, 5, 6000),
         requests_per_minute_user=_int(env, "REQUESTS_PER_MINUTE_USER", 30, 5, 6000),
         wake_timeout=float(_int(env, "TARGET_WAKE_SECONDS", 30, 0, 300)),
-        behind_proxy=(env.get("BEHIND_PROXY") or "").strip().lower() in ("1", "true", "yes"),
+        client_ip_header=_client_ip_header(env),
         google_client_id=(env.get("GOOGLE_CLIENT_ID") or "").strip() or None,
         google_client_secret=(env.get("GOOGLE_CLIENT_SECRET") or "").strip() or None,
     )

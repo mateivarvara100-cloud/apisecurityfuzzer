@@ -4,6 +4,7 @@ import { useSession } from "./auth/session";
 import { Layout } from "./components/Layout";
 import { Compare } from "./pages/Compare";
 import { History } from "./pages/History";
+import { HowItWorks } from "./pages/HowItWorks";
 import { Privacy, Terms } from "./pages/Legal";
 import { NewScan } from "./pages/NewScan";
 import { ResetPassword } from "./pages/ResetPassword";
@@ -44,6 +45,7 @@ export function App() {
       <Route element={<Layout />}>
         <Route index element={<Home />} />
         <Route path="sample" element={<Sample />} />
+        <Route path="how-it-works" element={<HowItWorks />} />
         <Route path="terms" element={<Terms />} />
         <Route path="privacy" element={<Privacy />} />
         <Route path="reset-password" element={<ResetPassword />} />

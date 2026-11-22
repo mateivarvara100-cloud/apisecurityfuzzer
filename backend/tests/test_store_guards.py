@@ -164,10 +164,24 @@ def test_the_key_table_cannot_grow_without_end():
     assert len(limiter._hits) <= 100
 
 
-def test_client_address_behind_a_proxy_is_the_last_forwarded_entry():
-    scope = {"client": ("10.0.0.1", 1234), "headers": [(b"x-forwarded-for", b"6.6.6.6, 203.0.113.9")]}
-    assert client_ip(scope, behind_proxy=True) == "203.0.113.9"  # what the proxy saw
-    assert client_ip(scope, behind_proxy=False) == "10.0.0.1"  # without a proxy the header is ignored
+def test_client_address_comes_only_from_the_named_header():
+    forged = (b"x-forwarded-for", b"6.6.6.6, 203.0.113.7")  # Render keeps these: never read
+    scope = {"client": ("10.0.0.1", 1234), "headers": [forged, (b"cf-connecting-ip", b" 203.0.113.9 ")]}
+    assert client_ip(scope, "cf-connecting-ip") == "203.0.113.9"
+    assert client_ip(scope, None) == "10.0.0.1"
+    # Missing or not an address: the connection's, never X-Forwarded-For
+    assert client_ip({"client": ("10.0.0.1", 1), "headers": [forged]}, "cf-connecting-ip") == "10.0.0.1"
+    bad = {"client": ("10.0.0.1", 1), "headers": [forged, (b"cf-connecting-ip", b"<script>")]}
+    assert client_ip(bad, "cf-connecting-ip") == "10.0.0.1"
+
+
+def test_client_ip_header_setting():
+    base = {"SUPABASE_URL": "https://x.supabase.co"}
+    assert load_config({**base, "CLIENT_IP_HEADER": " CF-Connecting-IP "}).client_ip_header == "cf-connecting-ip"
+    assert load_config(base).client_ip_header is None
+    for bad in ({"CLIENT_IP_HEADER": "x-forwarded-for"}, {"CLIENT_IP_HEADER": "a b"}, {"BEHIND_PROXY": "1"}):
+        with pytest.raises(ConfigError):
+            load_config({**base, **bad})
 
 
 # ---- settings -------------------------------------------------------------------------------

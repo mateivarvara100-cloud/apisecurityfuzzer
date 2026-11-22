@@ -198,7 +198,11 @@ export function Privacy() {
           Supabase: accounts, sign-in, sign-in and password-reset e-mails, the scan history and the list of your APIs
           (hosted in the EU).
         </li>
-        <li>Render: runs the scan server.</li>
+        <li>
+          Render: runs the scan server. Requests to it pass through Cloudflare, which Render puts in front of its
+          servers, so Cloudflare also sees your IP address; the scan server uses the address Cloudflare reports for
+          its rate limits.
+        </li>
         <li>Vercel: serves this website.</li>
         <li>
           Google: for "Continue with Google". The sign-in and sign-up pages load Google's sign-in script from

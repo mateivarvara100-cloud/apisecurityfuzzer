@@ -4,6 +4,7 @@ These sit in front of every route. The per-day scan limits are separate (in app.
 someone hammering the API with cheap requests, or sending a huge body to tie up the server.
 """
 
+import ipaddress
 import json
 import re
 import threading
@@ -56,18 +57,22 @@ class RateLimiter:
             self._hits.clear()
 
 
-def client_ip(scope: Scope, behind_proxy: bool) -> str:
-    """The caller's address. Behind a proxy (Render), the last X-Forwarded-For entry.
+def client_ip(scope: Scope, header: str | None) -> str:
+    """The caller's address: from `header` if the deployment names one, else the connection's.
 
-    The proxy appends the address it saw, so the last entry is the one a caller can't forge;
-    earlier entries are whatever the caller sent. Without a proxy the header is ignored.
+    `header` must be one the proxy in front sets itself, overwriting what the caller sent (on
+    Render, Cloudflare's cf-connecting-ip). X-Forwarded-For is never read: Render's proxy keeps the
+    entries the caller sent, so every one of them can be forged (checked on the live service,
+    Nov 2026). A missing or malformed header falls back to the connection, never to a guess.
     """
-    if behind_proxy:
+    if header:
+        wanted = header.encode("latin-1")
         for name, value in scope.get("headers", []):
-            if name == b"x-forwarded-for":
-                last = value.decode("latin-1").rsplit(",", 1)[-1].strip()
-                if last:
-                    return last
+            if name == wanted:
+                try:
+                    return str(ipaddress.ip_address(value.decode("latin-1").strip()))
+                except ValueError:
+                    break
     client = scope.get("client")
     return client[0] if client else "unknown"
 
@@ -91,9 +96,9 @@ class Guards:
 
     def __init__(
         self, app: ASGIApp, *, ip_limiter: RateLimiter, max_body: int = 16_384, max_upload: int = 1_500_000,
-        behind_proxy: bool = False,
+        client_ip_header: str | None = None,
     ) -> None:
-        self.app, self.ip_limiter, self.behind_proxy = app, ip_limiter, behind_proxy
+        self.app, self.ip_limiter, self.client_ip_header = app, ip_limiter, client_ip_header
         self.max_body, self.max_upload = max_body, max_upload
 
     def _cap(self, scope: Scope) -> int:
@@ -111,7 +116,7 @@ class Guards:
 
         # Preflight requests are answered by the CORS layer and don't count against the limit.
         if scope["method"] != "OPTIONS":
-            wait = self.ip_limiter.hit(client_ip(scope, self.behind_proxy))
+            wait = self.ip_limiter.hit(client_ip(scope, self.client_ip_header))
             if wait is not None:
                 await _reply(send_with_headers, 429, "Too many requests. Wait a moment and try again.", wait)
                 return

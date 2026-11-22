@@ -27,7 +27,10 @@ _SENSITIVE_KEY_PARTS = (
     "password", "passwd", "secret", "token", "apikey", "api_key", "authorization",
     "email", "phone", "ssn", "iban", "card",
 )
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# Starts only where a run of address characters starts: otherwise a long run with no "@" in an
+# answer (up to 64 KB, from an API we don't control) is rescanned from every position, in
+# quadratic time. Same matches either way.
+_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _BODY_EXCERPT = 600  # characters of a body kept in a redacted report: enough to see its shape
 _MIN_SECRET = 6  # shorter "secrets" are not searched for: replacing "1" or "bob" everywhere garbles the report
 

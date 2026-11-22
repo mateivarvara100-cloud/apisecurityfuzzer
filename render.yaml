@@ -15,8 +15,10 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.13.7"  # the version the tests run on
-      - key: BEHIND_PROXY
-        value: "1"
+      # Set by Cloudflare in front of Render, overwriting any a caller sends. Not X-Forwarded-For:
+      # Render keeps the caller's entries, so it can be forged.
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip
       - key: ALLOWED_ORIGINS
         value: https://apifuzz.vercel.app
       # The lab runs inside this service (start.sh), at the default LAB_URL http://127.0.0.1:8000.

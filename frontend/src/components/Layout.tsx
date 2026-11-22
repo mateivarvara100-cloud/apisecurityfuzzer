@@ -48,6 +48,9 @@ export function Layout() {
             <NavLink to="/sample" className="nav__link">
               Sample report
             </NavLink>
+            <NavLink to="/how-it-works" className="nav__link">
+              How it works
+            </NavLink>
           </nav>
           {session && (
             <div className="account">

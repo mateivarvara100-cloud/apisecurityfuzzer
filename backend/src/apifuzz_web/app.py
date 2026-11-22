@@ -181,7 +181,7 @@ def create_app(
     app.add_middleware(
         Guards,
         ip_limiter=RateLimiter(config.requests_per_minute_ip, 60),
-        behind_proxy=config.behind_proxy,
+        client_ip_header=config.client_ip_header,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -382,7 +382,7 @@ def create_app(
 
     @app.post("/auth/google")
     def google_sign_in(body: GoogleCodeIn, request: Request) -> dict[str, str]:
-        wait = sign_in_limiter.hit(client_ip(request.scope, config.behind_proxy))
+        wait = sign_in_limiter.hit(client_ip(request.scope, config.client_ip_header))
         if wait is not None:
             raise HTTPException(429, "Too many sign-in attempts. Wait a minute and try again.",
                                 headers={"Retry-After": str(max(1, round(wait)))})

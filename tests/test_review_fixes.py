@@ -5,6 +5,7 @@ tested, a target chosen by a document, a report that leaks data, or a silent ski
 """
 
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -332,6 +333,12 @@ class TestRedaction:
     def test_emails_in_plain_text_are_masked(self):
         shown = redacted(_result(res_body="contact bob@lab.test now")).findings[0].evidence[0].response.body
         assert shown == f"contact {REDACTED} now"
+
+    # A hostile API's answer can't stall redaction: 64 KB with no "@" took about 12 s before.
+    def test_email_masking_is_fast_on_a_long_answer(self):
+        start = time.perf_counter()
+        redacted(_result(res_body="a" * 65_536 + " bob@lab.test"))
+        assert time.perf_counter() - start < 1
 
     # A token is replaced wherever it appears, not only in the Authorization header.
     def test_tokens_are_replaced_everywhere(self):
